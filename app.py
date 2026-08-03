@@ -13,6 +13,9 @@ import streamlit as st
 import statsmodels.api as sm
 from scipy.stats import pearsonr, spearmanr, shapiro, probplot
 from sklearn.model_selection import train_test_split
+import jieba
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.metrics import (
     accuracy_score,
     balanced_accuracy_score,
@@ -162,9 +165,79 @@ def clean_extracted_problem_text(text):
     text = re.sub(r"\s+", " ", text)
     text = text.lower()
     return text
+# ========== 新增：基于 TF-IDF 和余弦相似度的题型识别 ==========
+def classify_by_tfidf(problem_text):
+    """
+    使用 jieba 分词 + TF-IDF 余弦相似度进行题型分类。
+    返回各个题型的相似度分数。
+    """
+    if not isinstance(problem_text, str) or not problem_text.strip():
+        return {}
 
+    # 1. 准备每个题型的“标准描述文本”（语料库）
+    #    这些描述应该包含该题型最典型的方法、术语
+    corpus = {
+        "评价类": (
+            "层次分析法 AHP 模糊综合评价 TOPSIS 熵权法 灰色关联度 数据包络分析 "
+            "优劣解距离法 指标权重 指标体系 综合得分 排序 评估 绩效考核 可行性研究 "
+            "多属性决策 主成分分析 因子分析 优劣评价 综合排名 满意度评价"
+        ),
+        "预测类": (
+            "时间序列 ARIMA 指数平滑 灰色预测 GM(1,1) 回归分析 趋势外推 "
+            "神经网络 深度学习 LSTM 支持向量回归 SVR 随机森林回归 XGBoost "
+            "增长率 预测值 未来走势 短期预测 中长期预测 预报 拟合 插值 变化规律"
+        ),
+        "优化类": (
+            "线性规划 整数规划 0-1规划 非线性规划 动态规划 多目标优化 目标规划 "
+            "遗传算法 粒子群算法 模拟退火 蚁群算法 禁忌搜索 启发式算法 "
+            "最短路径 最大流 最小生成树 网络流 调度 排班 指派 运输问题 "
+            "库存优化 资源分配 成本最小化 利润最大化 约束条件 最优解 方案优选"
+        ),
+        "机理分析类": (
+            "微分方程 偏微分方程 常微分方程 动力学模型 传染病模型 SIR SEIR "
+            "Logistic方程 捕食者-猎物模型 种群增长 扩散方程 反应扩散 对流-扩散 "
+            "牛顿力学 流体力学 传热 电磁场 化学反应动力学 恒温恒湿 "
+            "稳定平衡 分岔 相图 数值解 欧拉法 龙格-库塔法 有限元"
+        ),
+        "分类类": (
+            "逻辑回归 Logistic回归 支持向量机 SVM 决策树 随机森林 K近邻 KNN "
+            "朴素贝叶斯 神经网络 深度学习 CNN 判别分析 聚类分析 K-means 层次聚类 "
+            "二分类 多分类 混淆矩阵 准确率 精确率 召回率 F1值 ROC曲线 AUC "
+            "异常检测 模式识别 图像识别 文本分类 诊断 判定 识别 筛选 检出"
+        )
+    }
+
+    # 2. 构建“待分类文本”与“各类别标准文本”组成的列表
+    categories = list(corpus.keys())
+    documents = [problem_text]  # 第一个文档是赛题原文
+    for cat in categories:
+        documents.append(corpus[cat])  # 后面跟着每个类别的描述
+
+    # 3. 用 jieba 分词，并用 TfidfVectorizer 转换
+    def tokenize(text):
+        # jieba 分词，返回用空格分隔的词
+        return " ".join(jieba.cut(text))
+
+    tfidf_vectorizer = TfidfVectorizer(tokenizer=tokenize, token_pattern=None)
+    try:
+        tfidf_matrix = tfidf_vectorizer.fit_transform(documents)
+    except Exception:
+        return {}
+
+    # 4. 计算“赛题文本”与“每个类别描述”的余弦相似度
+    #    tfidf_matrix 的第 0 行是赛题，第 1~最后是各类别
+    problem_vec = tfidf_matrix[0:1]        # 赛题向量
+    category_vecs = tfidf_matrix[1:]       # 各类别向量
+    similarities = cosine_similarity(problem_vec, category_vecs).flatten()
+
+    # 5. 整理输出：每个类别得到一个 0~1 之间的相似度分数
+    result = {}
+    for i, cat in enumerate(categories):
+        result[cat] = float(similarities[i])
+
+    return result
 def multi_label_classify_problem_text(problem_text):
-    """多标签题型识别"""
+    """多标签题型识别：融合关键词匹配 + TF-IDF 相似度"""
     text = clean_extracted_problem_text(problem_text)
     if not text:
         return {
@@ -173,6 +246,8 @@ def multi_label_classify_problem_text(problem_text):
             "label_scores": {},
             "sub_question_context": []
         }
+
+    # ====== 方法一：传统关键词匹配（保留，作为辅助） ======
     keyword_sets = {
         "评价类": [
             "评价", "排序", "打分", "评选", "满意度", "权重", "层次分析",
@@ -200,16 +275,35 @@ def multi_label_classify_problem_text(problem_text):
             "聚类", "模式识别", "区分", "判定标准", "类别归属", "异常判定"
         ]
     }
-    label_scores = {}
+
+    keyword_scores = {}
     for label, keywords in keyword_sets.items():
         hit_count = sum(1 for kw in keywords if kw in text)
-        label_scores[label] = hit_count
+        keyword_scores[label] = hit_count
+
+    # ====== 方法二：TF-IDF 余弦相似度 ======
+    tfidf_scores = classify_by_tfidf(text)
+
+    # ====== 融合两种方法的分数 ======
+    # 把关键词分数归一化到 0~1 并加权，再与 TF-IDF 分数线性组合
+    combined_scores = {}
+    for label in keyword_sets.keys():
+        # 关键词得分：最高10分封顶，除以10映射到0~1
+        kw_norm = min(keyword_scores.get(label, 0), 10) / 10.0
+        # TF-IDF 得分：本身就是 0~1
+        tfidf_norm = tfidf_scores.get(label, 0.0)
+        # 组合：关键词权重 0.3，TF-IDF 权重 0.7
+        combined_scores[label] = 0.3 * kw_norm + 0.7 * tfidf_norm
+
+    # 按组合分数排序
     all_detected_labels = sorted(
-        [label for label, score in label_scores.items() if score > 0],
-        key=lambda x: label_scores[x],
+        [label for label, score in combined_scores.items() if score > 0.1],
+        key=lambda x: combined_scores[x],
         reverse=True
     )
     main_type = all_detected_labels[0] if all_detected_labels else "未识别"
+
+    # 提取子问题片段（保留原逻辑）
     sub_question_patterns = [
         r"问题\s*[一二三四五六七八九十0-9]+[、\s.]",
         r"\d+[\)）、.]"
@@ -223,10 +317,11 @@ def multi_label_classify_problem_text(problem_text):
             snippet = problem_text[start_pos:snippet_end].strip()
             sub_question_context.append(snippet)
     sub_question_context = list(dict.fromkeys(sub_question_context))[:10]
+
     return {
         "main_type": main_type,
         "all_detected_labels": all_detected_labels,
-        "label_scores": label_scores,
+        "label_scores": combined_scores,
         "sub_question_context": sub_question_context
     }
 
