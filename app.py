@@ -610,6 +610,172 @@ def inverse_logit(z):
     z = np.clip(z, -700, 700)
     return 1 / (1 + np.exp(-z))
 
+def validate_model_selection(y, target_type, model_type, groups=None):
+    """
+    检查因变量类型、取值范围、模型类型和分组变量是否匹配。
+    返回：
+        (True, "")       表示检查通过
+        (False, 错误信息) 表示不允许拟合
+    """
+
+    if y is None or len(y) == 0:
+        return False, "当前没有可用于建模的数据。"
+
+    y_numeric = pd.to_numeric(pd.Series(y), errors="coerce")
+
+    if y_numeric.isna().any():
+        return False, "因变量中存在无法转换为数值的内容。"
+
+    # 多元线性回归
+    if model_type == "多元线性回归":
+        if target_type not in ["连续", "次数"]:
+            return (
+                False,
+                "多元线性回归通常要求因变量为连续变量或次数变量。"
+            )
+
+    # Logit 变换线性回归
+    elif model_type == "Logit变换线性回归":
+        if target_type not in ["连续", "次数"]:
+            return (
+                False,
+                "Logit变换线性回归要求因变量为数值型变量。"
+            )
+
+        if ((y_numeric < 0) | (y_numeric > 1)).any():
+            return (
+                False,
+                "Logit变换线性回归要求因变量取值位于0到1之间。"
+            )
+
+        if y_numeric.nunique() < 2:
+            return (
+                False,
+                "Logit变换线性回归要求因变量至少包含两个不同取值。"
+            )
+
+    # 二项 Logistic 回归
+    elif model_type == "二项Logistic回归":
+        if target_type != "分类":
+            return (
+                False,
+                "二项Logistic回归要求因变量类型为分类变量。"
+            )
+
+        if pd.Series(y).nunique() != 2:
+            return (
+                False,
+                "二项Logistic回归要求因变量恰好包含两个类别。"
+            )
+
+    # 多项 Logistic 回归
+    elif model_type == "多项Logistic回归":
+        if target_type != "分类":
+            return (
+                False,
+                "多项Logistic回归要求因变量类型为分类变量。"
+            )
+
+        if pd.Series(y).nunique() < 3:
+            return (
+                False,
+                "多项Logistic回归至少需要三个类别。"
+            )
+
+    # Poisson 回归
+    elif model_type == "Poisson回归":
+        if target_type != "次数":
+            return (
+                False,
+                "Poisson回归要求因变量类型为次数变量。"
+            )
+
+        if (y_numeric < 0).any():
+            return (
+                False,
+                "Poisson回归要求因变量不能小于0。"
+            )
+
+        if not np.allclose(
+            y_numeric.to_numpy(),
+            np.round(y_numeric.to_numpy())
+        ):
+            return (
+                False,
+                "Poisson回归要求因变量为非负整数，当前数据中存在小数。"
+            )
+
+    # 负二项回归
+    elif model_type == "负二项回归":
+        if target_type != "次数":
+            return (
+                False,
+                "负二项回归要求因变量类型为次数变量。"
+            )
+
+        if (y_numeric < 0).any():
+            return (
+                False,
+                "负二项回归要求因变量不能小于0。"
+            )
+
+        if not np.allclose(
+            y_numeric.to_numpy(),
+            np.round(y_numeric.to_numpy())
+        ):
+            return (
+                False,
+                "负二项回归要求因变量为非负整数，当前数据中存在小数。"
+            )
+
+    # 线性混合效应模型
+    elif model_type == "线性混合效应模型":
+        if target_type not in ["连续", "次数"]:
+            return (
+                False,
+                "线性混合效应模型要求因变量为数值型变量。"
+            )
+
+        if groups is None:
+            return (
+                False,
+                "线性混合效应模型必须指定分组变量。"
+            )
+
+        if pd.Series(groups).nunique() < 2:
+            return (
+                False,
+                "分组变量至少需要包含两个不同的组。"
+            )
+
+    # 比例型混合效应模型
+    elif model_type == "比例型混合效应模型":
+        if target_type not in ["连续", "次数"]:
+            return (
+                False,
+                "比例型混合效应模型要求因变量为数值型变量。"
+            )
+
+        if ((y_numeric < 0) | (y_numeric > 1)).any():
+            return (
+                False,
+                "比例型混合效应模型要求因变量取值位于0到1之间。"
+            )
+
+        if groups is None:
+            return (
+                False,
+                "比例型混合效应模型必须指定分组变量。"
+            )
+
+        if pd.Series(groups).nunique() < 2:
+            return (
+                False,
+                "分组变量至少需要包含两个不同的组。"
+            )
+
+    return True, ""
+
 def fit_model(y, X, groups, model_type, robust_se=False):
     """拟合用户最终选择的模型。"""
     if model_type == "多元线性回归":
@@ -1312,7 +1478,8 @@ clean_data_for_model = clean_df.drop(columns=["_异常行"], errors="ignore")
 cleaning_summary = pd.DataFrame({
     "项目": ["处理时间", "赛题类型", "原始行数", "清洗后行数", "原始列数", "清洗后列数",
              "原始缺失单元格数", "缺失值插补数量",
-             "因缺失删除的行数",
+             "因变量缺失删除的行数",
+             "自变量缺失删除的行数",
              "检测到的异常行数",
              "因异常删除的行数", "清洗后剩余缺失单元格数", "缺失值处理方式", "异常值识别方法",
              "异常值处理动作", "重复观测分组变量", "删除的无用列"],
@@ -1323,6 +1490,7 @@ cleaning_summary = pd.DataFrame({
         original_shape[1], clean_data_for_model.shape[1],
         before_missing_cells,
         imputed_cells,
+        deleted_target_missing_rows,
         deleted_missing_rows,
         outlier_row_count,
         deleted_outlier_rows,
@@ -1336,8 +1504,8 @@ clean_metric1, clean_metric2, clean_metric3, clean_metric4 = st.columns(4)
 clean_metric1.metric("缺失值插补数量", imputed_cells)
 clean_metric2.metric(
     "因缺失删除行数",
-    deleted_missing_rows + deleted_missing_rows
-    )
+    deleted_target_missing_rows + deleted_missing_rows
+)
 clean_metric3.metric("检测到异常行数", outlier_row_count)
 clean_metric4.metric("清洗后样本数", clean_data_for_model.shape[0])
 
@@ -1524,11 +1692,6 @@ try:
         st.error("当前模型需要分组变量，请先在上方选择重复观测分组变量。")
         st.stop()
 
-    if final_model_type in ["二项Logistic回归"] and variable_types[target] != "分类":
-        st.warning("当前因变量不是分类变量，请确认变量类型设置是否正确。")
-    if final_model_type in ["Poisson回归", "负二项回归"] and variable_types[target] != "次数":
-        st.warning("Poisson和负二项回归通常要求因变量为次数型变量。")
-
     vif_table = calculate_vif(X)
     st.write("多重共线性诊断")
     if vif_table.empty:
@@ -1538,60 +1701,47 @@ try:
         dataframe_download(vif_table, "VIF多重共线性诊断.csv")
 
     fit_button = st.button("开始拟合最终模型", type="primary")
+
     if fit_button:
-        fitted_result = fit_model(y, X, groups, final_model_type, robust_se=robust_se)
+
+        # 在真正拟合前检查模型是否适用于当前因变量
+        is_valid, validation_message = validate_model_selection(
+            y=y,
+            target_type=variable_types[target],
+            model_type=final_model_type,
+            groups=groups
+        )
+
+        if not is_valid:
+            st.error(validation_message)
+            st.stop()
+
+        # 检查通过后，才进行模型拟合
+        fitted_result = fit_model(
+            y,
+            X,
+            groups,
+            final_model_type,
+            robust_se=robust_se
+        )
+
         fitted_model = fitted_result["model"]
+
         if model_is_converged(fitted_model):
-            st.success("模型拟合完成，模型已收敛或未检测到明显收敛问题。")
+            st.success(
+                "模型拟合完成，模型已收敛或未检测到明显收敛问题。"
+            )
         else:
-            st.warning("模型未收敛，当前系数、P值和预测结果不建议直接用于论文。")
+            st.warning(
+                "模型未收敛，当前系数、P值和预测结果不建议直接用于论文。"
+            )
+
         st.session_state["fitted_result"] = fitted_result
         st.session_state["fitted_model"] = fitted_model
         st.session_state["final_model_type"] = final_model_type
         st.session_state["model_meta"] = model_meta
         st.session_state["X_for_assumption"] = X
         st.session_state["vif_table"] = vif_table
-
-except Exception as exc:
-    st.error(f"模型数据构造失败：{exc}")
-    st.info("请检查因变量、自变量、缺失值处理和变量类型设置。")
-
-# 从session_state恢复模型结果
-fitted_result = st.session_state.get("fitted_result")
-fitted_model = st.session_state.get("fitted_model")
-final_model_type = st.session_state.get("final_model_type")
-X_for_assumption = st.session_state.get("X_for_assumption")
-vif_table = st.session_state.get("vif_table", pd.DataFrame())
-
-# ------------------------------------------------------------
-# 9. 输出模型结果
-# ------------------------------------------------------------
-if fitted_result is not None and fitted_model is not None:
-    st.subheader("9. 模型结果")
-    model_type = fitted_result["model_type"]
-    model_meta = st.session_state.get("model_meta", {})
-    target_mapping = model_meta.get("target_mapping")
-    if target_mapping is not None:
-        st.write("分类因变量编码映射")
-        mapping_table = pd.DataFrame({"原始类别": list(target_mapping.keys()), "模型编码": list(target_mapping.values())})
-        st.dataframe(mapping_table, use_container_width=True)
-        dataframe_download(mapping_table, "因变量类别编码映射.csv")
-
-    st.write("模型系数与显著性")
-    result_table = make_result_table(fitted_model, model_type)
-    st.dataframe(result_table, use_container_width=True)
-    dataframe_download(result_table, "模型系数与显著性.csv")
-
-    st.write("模型评价指标")
-    metric_table = make_metric_table(fitted_result)
-    st.dataframe(metric_table, use_container_width=True)
-    dataframe_download(metric_table, "模型评价指标.csv")
-
-    with st.expander("查看完整模型摘要"):
-        try:
-            st.text(fitted_model.summary().as_text())
-        except Exception as exc:
-            st.warning(f"当前模型无法生成标准摘要：{exc}")
 
     prediction_table = create_prediction_table(fitted_result)
     st.write("实际值、预测值与残差")
@@ -1694,6 +1844,9 @@ if fitted_result is not None and fitted_model is not None:
             dataframe_download(cooks_table, "Cook距离.csv")
         except Exception as exc:
             st.info(f"Cook距离计算失败：{exc}")
+
+except Exception as exc:
+    st.warning(f"当前模型无法生成标准摘要：{exc}")
 
     # 分类模型诊断
     if model_type == "二项Logistic回归":
