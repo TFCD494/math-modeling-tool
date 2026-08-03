@@ -1,4 +1,6 @@
+from pathlib import Path
 import io
+import base64
 import os
 import re
 import warnings
@@ -55,6 +57,84 @@ st.set_page_config(
     page_title="数学建模前期数据分析工具",
     layout="wide",
 )
+
+# ===== 页面标题图片路径 =====
+_fursona_file = Path(__file__).parent / "assets" / "fursona_shu.png"
+# ===== 页面标题图片路径结束 =====
+
+# ===== 页面标题 =====
+
+st.markdown(
+    """
+    <style>
+    /* 标题图片和文字垂直居中 */
+    div[data-testid="stHorizontalBlock"] {
+        align-items: center !important;
+    }
+
+    /* 标题文字 */
+    .old-main-title {
+        color: #26354a;
+        font-size: 72px;
+        font-weight: 800;
+        line-height: 220px;
+        white-space: nowrap;
+        letter-spacing: 1px;
+        margin: 0;
+        padding: 0;
+    }
+
+    /* 标题区域列的上下空白 */
+    div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
+    }
+
+    /*
+    标题图片位置微调：
+    正值向右，负值向左；
+    正值向下，负值向上。
+    */
+    div[data-testid="stHorizontalBlock"]:has(.old-main-title)
+    > div[data-testid="column"]:first-child
+    [data-testid="stImage"] {
+        transform: translate(28px, -5px) !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# 标题区域
+_title_col_image, _title_col_text = st.columns(
+    [1.5, 8.5],
+    gap="small",
+)
+
+with _title_col_image:
+    if _fursona_file.exists():
+        st.image(str(_fursona_file), width=220)
+    else:
+        st.error(f"找不到图片：{_fursona_file}")
+
+with _title_col_text:
+    st.markdown(
+        """
+        <div class="old-main-title">
+            学建模前期数据分析工具
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+# ===== 页面标题结束 =====
+
+
+
+
+
+
+
 
 sns.set_theme(style="whitegrid")
 
@@ -127,7 +207,20 @@ def setup_chinese_font():
 
 
 setup_chinese_font()
+def load_image_as_base64(image_path):
+    """读取本地图片并转换为 Base64，供网页嵌入。"""
+    try:
+        with open(image_path, "rb") as image_file:
+            encoded = base64.b64encode(
+                image_file.read()
+            ).decode("utf-8")
 
+        return encoded
+
+    except Exception:
+        return ""
+fursona_path = "assets/fursona_shu.png"
+fursona_base64 = load_image_as_base64(fursona_path)
 
 # ============================================================
 # 三、Session State 管理
@@ -2310,11 +2403,90 @@ def generate_assumptions(
 # 十一、侧边栏设置
 # ============================================================
 
-st.title("数学建模大赛前期数据分析工具")
-st.caption(
-    "数据清洗、变量识别、可视化、相关性分析、模型推荐与统计建模"
-)
+    header_html = """
+    <style>
+    .furry-header {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        margin: 8px 0 4px 0;
+        min-height: 150px;
+    }
 
+    .furry-title {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .furry-title h1 {
+        margin: 0;
+        color: #243447;
+        font-size: clamp(28px, 3.2vw, 48px);
+        line-height: 1.2;
+        font-weight: 750;
+        letter-spacing: 0;
+    }
+
+    .furry-title p {
+        margin: 12px 0 0 0;
+        color: #687586;
+        font-size: 16px;
+        line-height: 1.6;
+    }
+
+    .fursona-image {
+        width: min(270px, 30vw);
+        max-height: 170px;
+        object-fit: contain;
+        object-position: center;
+        flex-shrink: 0;
+    }
+
+    @media (max-width: 700px) {
+        .furry-header {
+            gap: 8px;
+            min-height: 105px;
+        }
+
+        .fursona-image {
+            width: 125px;
+            max-height: 105px;
+        }
+
+        .furry-title h1 {
+            font-size: 25px;
+        }
+
+        .furry-title p {
+            font-size: 13px;
+            line-height: 1.4;
+        }
+    }
+    </style>
+
+    <div class="furry-header">
+        <div class="furry-title">
+            <h1>数学建模大赛前期数据分析工具</h1>
+            <p>数据清洗、变量识别、可视化、相关性分析、模型推荐与统计建模</p>
+        </div>
+        <img
+            class="fursona-image"
+            src="data:image/png;base64,PLACEHOLDER"
+            alt="兽设抱着数"
+        >
+    </div>
+    """
+
+    header_html = header_html.replace(
+        "PLACEHOLDER",
+        fursona_base64,
+    )
+
+    st.markdown(
+        header_html,
+        unsafe_allow_html=True,
+    )
+    
 with st.sidebar:
     st.title('功能导航')
     app_mode = st.radio(
