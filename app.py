@@ -592,6 +592,7 @@ def try_parse_datetime(series):
         parsed = pd.to_datetime(
             series,
             errors="coerce",
+        utc=True,
         )
 
         if parsed.notna().mean() >= 0.8:
@@ -4535,3 +4536,103 @@ else:  # 优化求解模块
             st.error(f"求解错误：{e}")
 
     # 以下优化代码结束
+
+
+# ==================== 建模彩蛋模块 ====================
+# 本模块只负责显示趣味内容，不参与任何数据处理、模型拟合和结果计算。
+# 如果不想显示，直接删除本模块即可。
+
+try:
+    import hashlib
+
+    EASTER_EGG_QUOTES = [
+        "模型不会自动变好，但数据清洗后通常会更诚实。",
+        "相关性可以一起散步，但不代表它们互相导致。",
+        "先看数据，再选模型；不要让模型替题目做决定。",
+        "一个好的评价体系，应该既能排序，也能解释为什么这样排序。",
+        "当结果特别完美时，先检查数据泄漏。",
+        "异常值不一定是错误，也可能是数据正在认真讲故事。",
+        "R²很高值得开心，但测试集表现更值得相信。",
+        "数学建模的第一步不是写公式，而是确认变量到底是什么意思。",
+        "如果所有指标权重都一样，至少要诚实地说这是等权重。",
+        "稳定的结论，比漂亮的结论更有价值。",
+    ]
+
+    EASTER_EGG_SIGNS = [
+        "今天适合检查一遍变量含义。",
+        "今天适合看看残差图。",
+        "今天适合重新确认正向指标和负向指标。",
+        "今天适合做一次敏感性分析。",
+        "今天适合给模型加一句合理的解释。",
+        "今天适合怀疑一下过高的准确率。",
+        "今天适合保存一份中间结果。",
+        "今天适合把代码注释写清楚。",
+    ]
+
+    now = datetime.now()
+
+    # 使用日期生成稳定索引。
+    # 同一天刷新页面时内容不变，不会影响正常运行。
+    date_code = now.strftime("%Y-%m-%d")
+    hash_value = int(
+        hashlib.md5(
+            date_code.encode("utf-8")
+        ).hexdigest(),
+        16
+    )
+
+    quote = EASTER_EGG_QUOTES[
+        hash_value % len(EASTER_EGG_QUOTES)
+    ]
+
+    today_sign = EASTER_EGG_SIGNS[
+        hash_value % len(EASTER_EGG_SIGNS)
+    ]
+
+    with st.expander(
+        "🔐 发现一个隐藏的建模彩蛋",
+        expanded=False
+    ):
+        st.markdown(
+            f"""
+            <div style="
+                padding: 16px;
+                border-radius: 12px;
+                background: linear-gradient(
+                    135deg,
+                    rgba(70,130,180,0.12),
+                    rgba(120,200,160,0.12)
+                );
+                border: 1px solid rgba(100,140,180,0.25);
+                margin-bottom: 10px;
+            ">
+                <h4>📐 今日建模语录</h4>
+                <p style="font-size: 18px;">
+                    “{quote}”
+                </p>
+                <p style="color: #777;">
+                    当前时间：{now.strftime("%Y-%m-%d %H:%M:%S")}
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        if st.button(
+            "🎲 抽取今日建模签",
+            key="easter_egg_sign_button"
+        ):
+            st.success(
+                f"今日建模签：{today_sign}"
+            )
+
+        st.caption(
+            "这个彩蛋不会修改数据、模型参数或分析结果。"
+        )
+
+except Exception:
+    # 彩蛋出现任何问题时静默跳过，
+    # 确保不会影响主程序正常运行。
+    pass
+
+# ==================== 建模彩蛋模块结束 ====================
