@@ -2780,6 +2780,25 @@ for col in [target] + predictors:
     )
 
 
+# 自动修正变量类型：避免数字列全部被识别为分类变量
+for col in [target] + predictors:
+    if col not in raw_df.columns:
+        continue
+
+    numeric_test = pd.to_numeric(
+        raw_df[col].astype(str).str.strip(),
+        errors="coerce",
+    )
+
+    valid_ratio = numeric_test.notna().mean()
+    unique_count = numeric_test.dropna().nunique()
+
+    if valid_ratio >= 0.8:
+        if unique_count <= 2:
+            variable_types[col] = "分类"
+        else:
+            variable_types[col] = "连续"
+
 current_signature = build_analysis_signature(
     file_name=uploaded_file.name,
     target=target,
@@ -2814,15 +2833,9 @@ symbol_mode = st.radio(
     horizontal=True,
 )
 
+# 注意：这里不要重新定义 target 和 predictors。
+# 它们已经在前面的建模设置部分确定。
 if symbol_mode == "样本符号表":
-    target = "是否购买"  # 改成你的真实目标列名
-
-    predictors = [
-        col for col in raw_df.columns
-        if col != target
-    ]
-
-    variable_types = raw_df.dtypes.astype(str).to_dict()
 
     sample_symbol_table = create_variable_symbol_table(
         target=target,
@@ -2900,6 +2913,34 @@ typed_df = convert_types(
     raw_df,
     variable_types,
 )
+
+# 自动把被读取为文本的数字列转换为数值型
+for col in typed_df.columns:
+    if col == target:
+        continue
+
+    converted = pd.to_numeric(
+        typed_df[col].astype(str).str.strip(),
+        errors="coerce",
+    )
+
+    if converted.notna().mean() >= 0.8:
+        typed_df[col] = converted
+
+
+# 自动修正被读取为文本的数字列
+for col in typed_df.columns:
+    if col == target:
+        continue
+
+    converted = pd.to_numeric(
+        typed_df[col].astype(str).str.strip(),
+        errors="coerce",
+    )
+
+    if converted.notna().mean() >= 0.8:
+        typed_df[col] = converted
+
 
 before_missing_cells = int(
     typed_df.isna().sum().sum()
@@ -3490,11 +3531,50 @@ try:
             "设计矩阵可能存在完全多重共线性，部分参数可能无法稳定估计。"
         )
 
+    target_type_for_model = variable_types.get(target, "分类")
+
+    # 统一变量类型名称，避免类型名称不一致导致模型推荐为“未识别”
+    type_aliases = {
+        "连续型": "连续",
+        "次数型": "次数",
+        "数值": "连续",
+        "数值型": "连续",
+        "类别": "分类",
+        "分类变量": "分类",
+    }
+    target_type_for_model = type_aliases.get(
+        target_type_for_model,
+        target_type_for_model,
+    )
+
     recommended_info = detect_model_type(
         y,
-        variable_types[target],
+        target_type_for_model,
         groups=groups,
     )
+
+    # 对未识别类型提供明确的兜底推荐
+    if recommended_info.get("model_type") == "未识别":
+        if target_type_for_model == "连续":
+            recommended_info = {
+                "model_type": "线性回归",
+                "reason": "目标变量被设置为连续型变量。",
+            }
+        elif target_type_for_model == "次数":
+            recommended_info = {
+                "model_type": "泊松回归",
+                "reason": "目标变量被设置为次数型变量。",
+            }
+        elif target_type_for_model == "分类":
+            unique_count = len(np.unique(y))
+            if unique_count <= 2:
+                model_name = "二元逻辑回归"
+            else:
+                model_name = "多项逻辑回归"
+            recommended_info = {
+                "model_type": model_name,
+                "reason": "目标变量被设置为分类变量。",
+            }
 
     recommended_model = recommended_info[
         "model_type"
