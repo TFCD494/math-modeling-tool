@@ -41,8 +41,39 @@ from statsmodels.stats.stattools import durbin_watson
 # 新增：解析 PDF 和 Word 文件
 import PyPDF2
 import docx
+# ============================================================
+# 动态下载并注册中文字体（解决 Linux 云服务器中文方块问题）
+# ============================================================
+import os
+import urllib.request
+import matplotlib.font_manager as fm
 
-warnings.filterwarnings("ignore")
+# 创建字体缓存目录
+font_dir = os.path.expanduser("~/.cache/matplotlib/fonts")
+os.makedirs(font_dir, exist_ok=True)
+font_path = os.path.join(font_dir, "NotoSansCJKsc-Regular.otf")
+
+# 如果字体文件不存在，则从网络下载（约 5 MB）
+if not os.path.exists(font_path):
+    try:
+        # 使用 Google Fonts 的 CDN 链接（国内可能较慢，但一般能用）
+        url = "https://github.com/GoogleFonts/noto-cjk/raw/main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf"
+        st.info("正在下载中文字体（约 5 MB），首次加载可能需要几秒钟...")
+        urllib.request.urlretrieve(url, font_path)
+        st.success("字体下载完成！")
+    except Exception as e:
+        st.warning(f"字体下载失败：{e}，将使用系统默认字体，部分中文可能显示异常。")
+
+# 如果字体文件存在，则注册到 matplotlib
+if os.path.exists(font_path):
+    fm.fontManager.addfont(font_path)
+    # 获取字体名称（实际是文件路径，但可识别）
+    prop = fm.FontProperties(fname=font_path)
+    plt.rcParams["font.sans-serif"] = [prop.get_name()] + ["DejaVu Sans"]
+else:
+    # 保底方案
+# ============================================================
+    warnings.filterwarnings("ignore")
 st.set_page_config(
     page_title="数学建模前期数据分析工具",
     layout="wide"
