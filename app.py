@@ -58,6 +58,61 @@ st.set_page_config(
     layout="wide",
 )
 
+# ===== 页面背景图片 =====
+import base64
+from pathlib import Path
+
+_bg_path = Path(__file__).resolve().parent / "assets" / "background.png"
+
+if _bg_path.exists():
+    _bg_base64 = base64.b64encode(
+        _bg_path.read_bytes()
+    ).decode("ascii")
+
+    st.markdown(
+        f"""
+        <style>
+        html, body, .stApp {{
+            background: transparent !important;
+        }}
+
+        [data-testid="stAppViewContainer"] {{
+            background: transparent !important;
+        }}
+
+        [data-testid="stHeader"] {{
+            background: transparent !important;
+        }}
+
+        #custom-background-image {{
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            object-fit: cover;
+            z-index: -1;
+            pointer-events: none;
+        }}
+
+        [data-testid="stMain"] {{
+            background: rgba(255, 255, 255, 0.10) !important;
+        }}
+        </style>
+
+        <img
+            id="custom-background-image"
+            src="data:image/png;base64,{_bg_base64}"
+        />
+        """,
+        unsafe_allow_html=True,
+    )
+else:
+    st.error(f"找不到背景图片：{_bg_path}")
+
+# ===== 页面背景图片结束 =====
+
+
 # ===== 页面标题图片路径 =====
 _fursona_file = Path(__file__).parent / "assets" / "fursona_shu.png"
 # ===== 页面标题图片路径结束 =====
@@ -4808,3 +4863,5 @@ except Exception:
     pass
 
 # ==================== 建模彩蛋模块结束 ====================
+
+
