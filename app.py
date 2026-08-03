@@ -48,11 +48,14 @@ st.set_page_config(
     layout="wide"
 )
 sns.set_theme(style="whitegrid")
+# ===== 修改后的字体设置（适配 Windows / Mac / Linux 云服务器）=====
 plt.rcParams["font.sans-serif"] = [
-    "SimHei",
-    "Microsoft YaHei",
-    "Arial Unicode MS",
-    "DejaVu Sans"
+    "WenQuanYi Zen Hei",      # Linux 云服务器（Streamlit Cloud）自带
+    "Noto Sans CJK SC",      # Linux 另一种常见中文字体
+    "SimHei",                # Windows 黑体
+    "Microsoft YaHei",       # Windows 微软雅黑
+    "Arial Unicode MS",      # Mac 系统
+    "DejaVu Sans"            # 最后保底（不支持中文，仅防报错）
 ]
 plt.rcParams["axes.unicode_minus"] = False
 
