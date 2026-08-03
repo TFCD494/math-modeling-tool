@@ -219,7 +219,7 @@ def load_image_as_base64(image_path):
 
     except Exception:
         return ""
-fursona_path = "assets/fursona_shu.png"
+fursona_path = str(Path(__file__).resolve().parent / "assets" / "fursona_shu.png")
 fursona_base64 = load_image_as_base64(fursona_path)
 
 # ============================================================
