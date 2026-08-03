@@ -1010,6 +1010,7 @@ if uploaded_file is None:
 # ============================================================
 # 十三、读取数据
 # ============================================================
+raw_df = None
 try:
     if uploaded_file.name.lower().endswith(".csv"):
         raw_df = pd.read_csv(uploaded_file)
@@ -1028,7 +1029,7 @@ if "last_uploaded_file" not in st.session_state or st.session_state["last_upload
 # ============================================================
 # 十四、数据读取后的主面板逻辑
 # ============================================================
-if 'raw_df' not in locals():
+if raw_df is None or raw_df.empty:
     st.error("数据未成功加载，请检查文件格式")
     st.stop()
 
@@ -1382,7 +1383,7 @@ X_for_assumption = None
 vif_table = pd.DataFrame()
 y = None
 X = None
-
+groups = None
 try:
     y, X, groups, model_meta = build_model_data(
         clean_data_for_model, target, predictors, variable_types, group_col=group_col
