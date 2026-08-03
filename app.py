@@ -2790,24 +2790,11 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
         )
 
 
-    # 自动修正变量类型：避免数字列全部被识别为分类变量
-    for col in [target] + predictors:
-        if col not in raw_df.columns:
-            continue
+    # 注意：
+    # 页面上的变量类型已经由用户确认。
+    # 这里不能再次自动覆盖，否则“次数”“分类”等人工设置会失效。
+    # 自动识别结果只用于初始默认值。
 
-        numeric_test = pd.to_numeric(
-            raw_df[col].astype(str).str.strip(),
-            errors="coerce",
-        )
-
-        valid_ratio = numeric_test.notna().mean()
-        unique_count = numeric_test.dropna().nunique()
-
-        if valid_ratio >= 0.8:
-            if unique_count <= 2:
-                variable_types[col] = "分类"
-            else:
-                variable_types[col] = "连续"
 
     current_signature = build_analysis_signature(
         file_name=uploaded_file.name,
@@ -3551,6 +3538,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
             "数值型": "连续",
             "类别": "分类",
             "分类变量": "分类",
+            "时间型": "时间",
         }
         target_type_for_model = type_aliases.get(
             target_type_for_model,
@@ -3563,24 +3551,29 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
             groups=groups,
         )
 
-        # 对未识别类型提供明确的兜底推荐
+        # 对未识别类型提供兜底推荐。
+        # 模型名称必须与 MODEL_OPTIONS 完全一致。
         if recommended_info.get("model_type") == "未识别":
             if target_type_for_model == "连续":
                 recommended_info = {
-                    "model_type": "线性回归",
+                    "model_type": "多元线性回归",
                     "reason": "目标变量被设置为连续型变量。",
                 }
+
             elif target_type_for_model == "次数":
                 recommended_info = {
-                    "model_type": "泊松回归",
+                    "model_type": "Poisson回归",
                     "reason": "目标变量被设置为次数型变量。",
                 }
+
             elif target_type_for_model == "分类":
                 unique_count = len(np.unique(y))
+
                 if unique_count <= 2:
-                    model_name = "二元逻辑回归"
+                    model_name = "二项Logistic回归"
                 else:
-                    model_name = "多项逻辑回归"
+                    model_name = "多项Logistic回归"
+
                 recommended_info = {
                     "model_type": model_name,
                     "reason": "目标变量被设置为分类变量。",
