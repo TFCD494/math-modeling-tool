@@ -307,8 +307,14 @@ def create_variable_symbol_table(df, target, predictors, variable_types):
 # ============================================================
 def fill_missing_values(df, variable_types, method):
     """
-    缺失值处理。
-    返回：result, report, deleted_rows, imputed_cells
+    对自变量进行缺失值处理。
+
+    注意：
+    因变量不应该在这里进行插补。
+    因变量缺失样本应在调用本函数前删除。
+    
+    返回：
+    result, report, deleted_rows, imputed_cells
     """
     result = df.copy()
     report_rows = []
@@ -1175,10 +1181,36 @@ if symbol_mode == "变量符号表":
 # 5. 数据清洗
 # ------------------------------------------------------------
 st.subheader("5. 数据清洗")
+st.info(
+    "因变量缺失的样本无法用于监督建模，因此程序会直接删除；"
+    "缺失值填补仅针对自变量。"
+)
 typed_df = convert_types(raw_df, variable_types)
+
 before_missing_cells = int(typed_df.isna().sum().sum())
-(clean_df, missing_detail_table, deleted_missing_rows, imputed_cells) = fill_missing_values(
-    typed_df, variable_types, missing_method
+
+# 因变量缺失时不进行插补，直接删除对应样本
+target_missing_mask = typed_df[target].isna()
+deleted_target_missing_rows = int(target_missing_mask.sum())
+
+typed_df = typed_df.loc[~target_missing_mask].copy()
+
+# 缺失值处理只针对自变量
+predictor_variable_types = {
+    col: variable_types[col]
+    for col in predictors
+    if col in variable_types
+}
+
+(
+    clean_df,
+    missing_detail_table,
+    deleted_missing_rows,
+    imputed_cells
+) = fill_missing_values(
+    typed_df,
+    predictor_variable_types,
+    missing_method
 )
 
 # 异常值处理
@@ -1217,7 +1249,9 @@ clean_data_for_model = clean_df.drop(columns=["_异常行"], errors="ignore")
 
 cleaning_summary = pd.DataFrame({
     "项目": ["处理时间", "赛题类型", "原始行数", "清洗后行数", "原始列数", "清洗后列数",
-             "原始缺失单元格数", "缺失值插补数量", "因缺失删除的行数", "检测到的异常行数",
+             "原始缺失单元格数", "缺失值插补数量",
+             "因缺失删除的行数",
+             "检测到的异常行数",
              "因异常删除的行数", "清洗后剩余缺失单元格数", "缺失值处理方式", "异常值识别方法",
              "异常值处理动作", "重复观测分组变量", "删除的无用列"],
     "结果": [
@@ -1225,8 +1259,12 @@ cleaning_summary = pd.DataFrame({
         problem_type if problem_type else "未填写",
         original_shape[0], clean_data_for_model.shape[0],
         original_shape[1], clean_data_for_model.shape[1],
-        before_missing_cells, imputed_cells, deleted_missing_rows,
-        outlier_row_count, deleted_outlier_rows, after_missing_cells,
+        before_missing_cells,
+        imputed_cells,
+        deleted_missing_rows,
+        outlier_row_count,
+        deleted_outlier_rows,
+        after_missing_cells,
         missing_method, outlier_method, outlier_action,
         group_col, ", ".join(unused_columns) if unused_columns else "无"
     ]
@@ -1234,7 +1272,10 @@ cleaning_summary = pd.DataFrame({
 st.write("清洗结果概览")
 clean_metric1, clean_metric2, clean_metric3, clean_metric4 = st.columns(4)
 clean_metric1.metric("缺失值插补数量", imputed_cells)
-clean_metric2.metric("因缺失删除行数", deleted_missing_rows)
+clean_metric2.metric(
+    "因缺失删除行数",
+    deleted_missing_rows + deleted_missing_rows
+    )
 clean_metric3.metric("检测到异常行数", outlier_row_count)
 clean_metric4.metric("清洗后样本数", clean_data_for_model.shape[0])
 
@@ -1254,7 +1295,10 @@ st.text_area("可直接用于论文的数据清洗表述", f"""
 本文首先对原始数据进行完整性、一致性和变量类型检查。
 原始数据共包含{original_shape[0]}条样本和{original_shape[1]}个变量。
 针对缺失数据，本文采用"{missing_method}"方法进行处理，
-共插补{imputed_cells}个缺失单元格，因缺失值删除{deleted_missing_rows}条样本。
+共插补{imputed_cells}个缺失单元格。
+对于因变量缺失的样本，由于无法提供有效的被解释变量观测值，
+直接删除{deleted_target_missing_rows}条样本；
+另外因自变量缺失处理删除{deleted_missing_rows}条样本。
 针对异常数据，本文采用"{outlier_method}"方法进行识别，
 共检测到{outlier_row_count}条异常样本，其中因异常值删除{deleted_outlier_rows}条样本。
 经过数据类型转换、缺失值处理、异常值处理和无用列处理后，
