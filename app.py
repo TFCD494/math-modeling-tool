@@ -56,6 +56,47 @@ plt.rcParams["axes.unicode_minus"] = False
 # ============================================================
 # 一、通用工具函数
 # ============================================================
+def clear_model_session_state():
+    """清除旧的模型结果，避免页面显示与当前设置不一致。"""
+    model_keys = [
+        "fitted_result",
+        "fitted_model",
+        "final_model_type",
+        "model_meta",
+        "X_for_assumption",
+        "vif_table"
+    ]
+
+    for key in model_keys:
+        st.session_state.pop(key, None)
+
+def build_analysis_signature(
+    target,
+    predictors,
+    variable_types,
+    group_col,
+    missing_method,
+    outlier_method,
+    outlier_action,
+    robust_se,
+    use_test_set,
+    test_size
+):
+    """根据当前分析设置生成唯一签名。"""
+    signature_data = {
+        "target": target,
+        "predictors": sorted(predictors),
+        "variable_types": variable_types,
+        "group_col": group_col,
+        "missing_method": missing_method,
+        "outlier_method": outlier_method,
+        "outlier_action": outlier_action,
+        "robust_se": robust_se,
+        "use_test_set": use_test_set,
+        "test_size": test_size
+    }
+
+    return repr(signature_data)
 def clean_column_name(name):
     """规范列名。"""
     name = str(name).strip()
@@ -1169,7 +1210,28 @@ for col in [target] + predictors:
         index=default_index,
         key=f"variable_type_{col}"
     )
+# 根据当前数据分析设置判断旧模型是否仍然有效
+current_analysis_signature = build_analysis_signature(
+    target=target,
+    predictors=predictors,
+    variable_types=variable_types,
+    group_col=group_col,
+    missing_method=missing_method,
+    outlier_method=outlier_method,
+    outlier_action=outlier_action,
+    robust_se=robust_se,
+    use_test_set=use_test_set,
+    test_size=test_size
+)
 
+previous_analysis_signature = st.session_state.get(
+    "analysis_signature"
+)
+
+if previous_analysis_signature != current_analysis_signature:
+    clear_model_session_state()
+    st.session_state["analysis_signature"] = current_analysis_signature
+    
 # ✅ 修正：变量符号表移至 variable_types 确认之后
 if symbol_mode == "变量符号表":
     variable_symbol_table = create_variable_symbol_table(raw_df, target, predictors, variable_types)
@@ -1450,7 +1512,14 @@ try:
     ]
     recommended_index = model_options.index(recommended_model) if recommended_model in model_options else 0
     final_model_type = st.selectbox("请选择最终拟合模型", model_options, index=recommended_index)
+    # 如果用户更换了最终模型类型，清除之前的模型结果
+    previous_model_type = st.session_state.get(
+        "selected_model_type"
+    )
 
+    if previous_model_type != final_model_type:
+        clear_model_session_state()
+        st.session_state["selected_model_type"] = final_model_type
     if final_model_type in ["线性混合效应模型", "比例型混合效应模型"] and group_col == "无":
         st.error("当前模型需要分组变量，请先在上方选择重复观测分组变量。")
         st.stop()
