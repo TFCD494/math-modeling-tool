@@ -2315,6 +2315,15 @@ st.caption(
 )
 
 with st.sidebar:
+    st.title('功能导航')
+    app_mode = st.radio(
+        '请选择功能模块',
+        ['数据分析', '优化求解'],
+        index=0
+    )
+    if app_mode != st.session_state.get('app_mode', '数据分析'):
+        st.session_state.app_mode = app_mode
+        st.rerun()
     st.header("基本设置")
 
     st.subheader("赛题描述")
@@ -2524,762 +2533,938 @@ with st.sidebar:
     )
 
 
-# ============================================================
-# 十二、读取数据
-# ============================================================
+if st.session_state.get('app_mode', '数据分析') == '数据分析':
+    # ============================================================
+    # 十二、读取数据
+    # ============================================================
 
-if uploaded_file is None:
-    st.info("请在左侧上传 CSV 或 Excel 数据表。")
-    st.stop()
+    if uploaded_file is None:
+        st.info("请在左侧上传 CSV 或 Excel 数据表。")
+        st.stop()
 
-try:
-    uploaded_file.seek(0)
+    try:
+        uploaded_file.seek(0)
 
-    if uploaded_file.name.lower().endswith(".csv"):
-        raw_df = pd.read_csv(uploaded_file)
-    else:
-        raw_df = pd.read_excel(uploaded_file)
+        if uploaded_file.name.lower().endswith(".csv"):
+            raw_df = pd.read_csv(uploaded_file)
+        else:
+            raw_df = pd.read_excel(uploaded_file)
 
-except Exception as exc:
-    st.error(f"读取文件失败：{exc}")
-    st.stop()
+    except Exception as exc:
+        st.error(f"读取文件失败：{exc}")
+        st.stop()
 
-if raw_df is None or raw_df.empty:
-    st.error("数据未成功加载，请检查文件内容。")
-    st.stop()
+    if raw_df is None or raw_df.empty:
+        st.error("数据未成功加载，请检查文件内容。")
+        st.stop()
 
-raw_df.columns = make_unique_columns(
-    raw_df.columns
-)
-
-original_shape = raw_df.shape
-all_columns = list(raw_df.columns)
-
-if len(all_columns) < 2:
-    st.error(
-        "数据表至少需要包含一列因变量和一列自变量。"
+    raw_df.columns = make_unique_columns(
+        raw_df.columns
     )
-    st.stop()
+
+    original_shape = raw_df.shape
+    all_columns = list(raw_df.columns)
+
+    if len(all_columns) < 2:
+        st.error(
+            "数据表至少需要包含一列因变量和一列自变量。"
+        )
+        st.stop()
 
 
-# ============================================================
-# 十三、数据初探
-# ============================================================
+    # ============================================================
+    # 十三、数据初探
+    # ============================================================
 
-st.subheader("1. 数据初探")
+    st.subheader("1. 数据初探")
 
-metric_col1, metric_col2, metric_col3, metric_col4 = (
-    st.columns(4)
-)
+    metric_col1, metric_col2, metric_col3, metric_col4 = (
+        st.columns(4)
+    )
 
-metric_col1.metric(
-    "原始行数",
-    original_shape[0],
-)
+    metric_col1.metric(
+        "原始行数",
+        original_shape[0],
+    )
 
-metric_col2.metric(
-    "原始列数",
-    original_shape[1],
-)
+    metric_col2.metric(
+        "原始列数",
+        original_shape[1],
+    )
 
-metric_col3.metric(
-    "缺失单元格数",
-    int(raw_df.isna().sum().sum()),
-)
+    metric_col3.metric(
+        "缺失单元格数",
+        int(raw_df.isna().sum().sum()),
+    )
 
-metric_col4.metric(
-    "重复行数",
-    int(raw_df.duplicated().sum()),
-)
+    metric_col4.metric(
+        "重复行数",
+        int(raw_df.duplicated().sum()),
+    )
 
-st.write("数据前20行")
-st.dataframe(
-    raw_df.head(20),
-    use_container_width=True,
-)
+    st.write("数据前20行")
+    st.dataframe(
+        raw_df.head(20),
+        use_container_width=True,
+    )
 
-with st.expander("查看字段基本信息"):
-    info_table = pd.DataFrame(
+    with st.expander("查看字段基本信息"):
+        info_table = pd.DataFrame(
+            {
+                "列名": raw_df.columns,
+                "数据类型": raw_df.dtypes.astype(str).values,
+                "非空数量": raw_df.notna().sum().values,
+                "缺失数量": raw_df.isna().sum().values,
+                "唯一值数量": raw_df.nunique(
+                    dropna=True
+                ).values,
+                "是否疑似ID列": [
+                    "是"
+                    if is_suspicious_id_column(
+                        raw_df[col],
+                        col,
+                    )
+                    else "否"
+                    for col in raw_df.columns
+                ],
+            }
+        )
+
+        st.dataframe(
+            info_table,
+            use_container_width=True,
+        )
+
+        dataframe_download(
+            info_table,
+            "字段基本信息.csv",
+            key="download_info_table",
+        )
+
+
+    # ============================================================
+    # 十四、变量选择
+    # ============================================================
+
+    st.subheader("2. 因变量、自变量与分组变量设置")
+
+    target = st.selectbox(
+        "请选择因变量",
+        all_columns,
+        index=0,
+    )
+
+    default_predictors = [
+        col
+        for col in all_columns
+        if (
+            col != target
+            and not is_suspicious_id_column(
+                raw_df[col],
+                col,
+            )
+        )
+    ]
+
+    predictors = st.multiselect(
+        "请选择自变量",
+        [
+            col
+            for col in all_columns
+            if col != target
+        ],
+        default=default_predictors,
+    )
+
+    if not predictors:
+        st.warning("请至少选择一个自变量。")
+        st.stop()
+
+    group_candidates = ["无"]
+
+    for col in all_columns:
+        if col == target or col in predictors:
+            continue
+
+        non_missing = raw_df[col].dropna()
+
+        if len(non_missing) == 0:
+            continue
+
+        group_count = non_missing.nunique()
+        group_sizes = non_missing.value_counts()
+
+        if (
+            group_count >= 2
+            and group_sizes.max() >= 2
+            and group_count < len(raw_df)
+        ):
+            group_candidates.append(col)
+
+    group_col = st.selectbox(
+        "重复观测分组变量",
+        group_candidates,
+        help=(
+            "如果同一对象有多次观测，请选择对应的对象编号。"
+        ),
+    )
+
+    if group_col != "无" and group_col in predictors:
+        predictors = [
+            col
+            for col in predictors
+            if col != group_col
+        ]
+
+    if not predictors:
+        st.error(
+            "移除分组变量后没有剩余自变量。"
+        )
+        st.stop()
+
+
+    # ============================================================
+    # 十五、变量类型识别
+    # ============================================================
+
+    st.subheader("3. 变量类型识别与确认")
+
+    initial_variable_types = {
+        col: classify_variable(raw_df[col])
+        for col in [target] + predictors
+    }
+
+    initial_type_table = pd.DataFrame(
         {
-            "列名": raw_df.columns,
-            "数据类型": raw_df.dtypes.astype(str).values,
-            "非空数量": raw_df.notna().sum().values,
-            "缺失数量": raw_df.isna().sum().values,
-            "唯一值数量": raw_df.nunique(
-                dropna=True
-            ).values,
-            "是否疑似ID列": [
-                "是"
-                if is_suspicious_id_column(
-                    raw_df[col],
-                    col,
+            "变量": list(
+                initial_variable_types.keys()
+            ),
+            "自动识别类型": list(
+                initial_variable_types.values()
+            ),
+            "原始数据类型": [
+                str(raw_df[col].dtype)
+                for col in initial_variable_types
+            ],
+            "唯一值数量": [
+                raw_df[col].nunique(
+                    dropna=True
                 )
-                else "否"
-                for col in raw_df.columns
+                for col in initial_variable_types
             ],
         }
     )
 
     st.dataframe(
-        info_table,
+        initial_type_table,
         use_container_width=True,
     )
 
-    dataframe_download(
-        info_table,
-        "字段基本信息.csv",
-        key="download_info_table",
+    st.caption(
+        "自动识别结果仅供参考，正式建模前请根据变量实际含义确认类型。"
     )
 
-
-# ============================================================
-# 十四、变量选择
-# ============================================================
-
-st.subheader("2. 因变量、自变量与分组变量设置")
-
-target = st.selectbox(
-    "请选择因变量",
-    all_columns,
-    index=0,
-)
-
-default_predictors = [
-    col
-    for col in all_columns
-    if (
-        col != target
-        and not is_suspicious_id_column(
-            raw_df[col],
-            col,
-        )
-    )
-]
-
-predictors = st.multiselect(
-    "请选择自变量",
-    [
-        col
-        for col in all_columns
-        if col != target
-    ],
-    default=default_predictors,
-)
-
-if not predictors:
-    st.warning("请至少选择一个自变量。")
-    st.stop()
-
-group_candidates = ["无"]
-
-for col in all_columns:
-    if col == target or col in predictors:
-        continue
-
-    non_missing = raw_df[col].dropna()
-
-    if len(non_missing) == 0:
-        continue
-
-    group_count = non_missing.nunique()
-    group_sizes = non_missing.value_counts()
-
-    if (
-        group_count >= 2
-        and group_sizes.max() >= 2
-        and group_count < len(raw_df)
-    ):
-        group_candidates.append(col)
-
-group_col = st.selectbox(
-    "重复观测分组变量",
-    group_candidates,
-    help=(
-        "如果同一对象有多次观测，请选择对应的对象编号。"
-    ),
-)
-
-if group_col != "无" and group_col in predictors:
-    predictors = [
-        col
-        for col in predictors
-        if col != group_col
+    variable_types = {}
+    type_options = [
+        "连续",
+        "分类",
+        "时间",
+        "次数",
     ]
 
-if not predictors:
-    st.error(
-        "移除分组变量后没有剩余自变量。"
-    )
-    st.stop()
+    for col in [target] + predictors:
+        default_type = initial_variable_types[col]
+
+        if default_type not in type_options:
+            default_type = "分类"
+
+        default_index = type_options.index(
+            default_type
+        )
+
+        variable_types[col] = st.selectbox(
+            f"确认变量 `{col}` 的类型",
+            type_options,
+            index=default_index,
+            key=f"variable_type_{col}",
+        )
 
 
-# ============================================================
-# 十五、变量类型识别
-# ============================================================
+    # 自动修正变量类型：避免数字列全部被识别为分类变量
+    for col in [target] + predictors:
+        if col not in raw_df.columns:
+            continue
 
-st.subheader("3. 变量类型识别与确认")
+        numeric_test = pd.to_numeric(
+            raw_df[col].astype(str).str.strip(),
+            errors="coerce",
+        )
 
-initial_variable_types = {
-    col: classify_variable(raw_df[col])
-    for col in [target] + predictors
-}
+        valid_ratio = numeric_test.notna().mean()
+        unique_count = numeric_test.dropna().nunique()
 
-initial_type_table = pd.DataFrame(
-    {
-        "变量": list(
-            initial_variable_types.keys()
-        ),
-        "自动识别类型": list(
-            initial_variable_types.values()
-        ),
-        "原始数据类型": [
-            str(raw_df[col].dtype)
-            for col in initial_variable_types
-        ],
-        "唯一值数量": [
-            raw_df[col].nunique(
-                dropna=True
-            )
-            for col in initial_variable_types
-        ],
-    }
-)
+        if valid_ratio >= 0.8:
+            if unique_count <= 2:
+                variable_types[col] = "分类"
+            else:
+                variable_types[col] = "连续"
 
-st.dataframe(
-    initial_type_table,
-    use_container_width=True,
-)
-
-st.caption(
-    "自动识别结果仅供参考，正式建模前请根据变量实际含义确认类型。"
-)
-
-variable_types = {}
-type_options = [
-    "连续",
-    "分类",
-    "时间",
-    "次数",
-]
-
-for col in [target] + predictors:
-    default_type = initial_variable_types[col]
-
-    if default_type not in type_options:
-        default_type = "分类"
-
-    default_index = type_options.index(
-        default_type
-    )
-
-    variable_types[col] = st.selectbox(
-        f"确认变量 `{col}` 的类型",
-        type_options,
-        index=default_index,
-        key=f"variable_type_{col}",
-    )
-
-
-# 自动修正变量类型：避免数字列全部被识别为分类变量
-for col in [target] + predictors:
-    if col not in raw_df.columns:
-        continue
-
-    numeric_test = pd.to_numeric(
-        raw_df[col].astype(str).str.strip(),
-        errors="coerce",
-    )
-
-    valid_ratio = numeric_test.notna().mean()
-    unique_count = numeric_test.dropna().nunique()
-
-    if valid_ratio >= 0.8:
-        if unique_count <= 2:
-            variable_types[col] = "分类"
-        else:
-            variable_types[col] = "连续"
-
-current_signature = build_analysis_signature(
-    file_name=uploaded_file.name,
-    target=target,
-    predictors=predictors,
-    variable_types=variable_types,
-    group_col=group_col,
-    missing_method=missing_method,
-    outlier_method=outlier_method,
-    outlier_action=outlier_action,
-    robust_se=robust_se,
-    use_test_set=use_test_set,
-    test_size=test_size,
-)
-
-reset_model_if_signature_changed(
-    current_signature
-)
-
-
-# ============================================================
-# 十六、符号表
-# ============================================================
-
-st.subheader("4. 数学建模符号表")
-
-symbol_mode = st.radio(
-    "符号表类型",
-    [
-        "样本符号表",
-        "变量符号表",
-    ],
-    horizontal=True,
-)
-
-# 注意：这里不要重新定义 target 和 predictors。
-# 它们已经在前面的建模设置部分确定。
-if symbol_mode == "样本符号表":
-
-    sample_symbol_table = create_variable_symbol_table(
+    current_signature = build_analysis_signature(
+        file_name=uploaded_file.name,
         target=target,
         predictors=predictors,
         variable_types=variable_types,
+        group_col=group_col,
+        missing_method=missing_method,
+        outlier_method=outlier_method,
+        outlier_action=outlier_action,
+        robust_se=robust_se,
+        use_test_set=use_test_set,
+        test_size=test_size,
     )
 
-    st.dataframe(
-        sample_symbol_table,
-        use_container_width=True,
+    reset_model_if_signature_changed(
+        current_signature
     )
 
-    dataframe_download(
-        sample_symbol_table,
-        "样本符号表.csv",
-        key="download_sample_symbol_table",
+
+    # ============================================================
+    # 十六、符号表
+    # ============================================================
+
+    st.subheader("4. 数学建模符号表")
+
+    symbol_mode = st.radio(
+        "符号表类型",
+        [
+            "样本符号表",
+            "变量符号表",
+        ],
+        horizontal=True,
     )
 
-else:
-    variable_symbol_table = (
-        create_variable_symbol_table(
-            target,
-            predictors,
-            variable_types,
+    # 注意：这里不要重新定义 target 和 predictors。
+    # 它们已经在前面的建模设置部分确定。
+    if symbol_mode == "样本符号表":
+
+        sample_symbol_table = create_variable_symbol_table(
+            target=target,
+            predictors=predictors,
+            variable_types=variable_types,
         )
-    )
+
+        st.dataframe(
+            sample_symbol_table,
+            use_container_width=True,
+        )
+
+        dataframe_download(
+            sample_symbol_table,
+            "样本符号表.csv",
+            key="download_sample_symbol_table",
+        )
+
+    else:
+        variable_symbol_table = (
+            create_variable_symbol_table(
+                target,
+                predictors,
+                variable_types,
+            )
+        )
+
+        st.info(
+            r"可以直接编辑“变量符号”“单位”和“变量含义”。"
+            r"例如：\mathrm{Year}_i"
+        )
+
+        edited_symbol_table = st.data_editor(
+            variable_symbol_table,
+            use_container_width=True,
+            num_rows="fixed",
+            disabled=[
+                "原始列名",
+                "变量角色",
+                "变量类型",
+            ],
+            key="variable_symbol_editor",
+        )
+
+        st.write("LaTeX 变量符号预览")
+
+        for _, row in edited_symbol_table.iterrows():
+            symbol = str(row["变量符号"]).strip()
+            original_name = str(row["原始列名"]).strip()
+
+            if symbol:
+                st.markdown(
+                    f"原始变量：`{original_name}`"
+                )
+                st.latex(symbol)
+
+        dataframe_download(
+            edited_symbol_table,
+            "变量符号表.csv",
+            key="download_variable_symbol_table",
+        )
+
+    # ============================================================
+    # 十七、数据清洗
+    # ============================================================
+
+    st.subheader("5. 数据清洗")
 
     st.info(
-        r"可以直接编辑“变量符号”“单位”和“变量含义”。"
-        r"例如：\mathrm{Year}_i"
+        "因变量缺失的样本无法用于监督建模，因此程序会直接删除；"
+        "缺失值填补仅针对自变量。"
     )
 
-    edited_symbol_table = st.data_editor(
-        variable_symbol_table,
-        use_container_width=True,
-        num_rows="fixed",
-        disabled=[
-            "原始列名",
-            "变量角色",
-            "变量类型",
-        ],
-        key="variable_symbol_editor",
+    typed_df = convert_types(
+        raw_df,
+        variable_types,
     )
 
-    st.write("LaTeX 变量符号预览")
+    # 自动把被读取为文本的数字列转换为数值型
+    for col in typed_df.columns:
+        if col == target:
+            continue
 
-    for _, row in edited_symbol_table.iterrows():
-        symbol = str(row["变量符号"]).strip()
-        original_name = str(row["原始列名"]).strip()
-
-        if symbol:
-            st.markdown(
-                f"原始变量：`{original_name}`"
-            )
-            st.latex(symbol)
-
-    dataframe_download(
-        edited_symbol_table,
-        "变量符号表.csv",
-        key="download_variable_symbol_table",
-    )
-
-# ============================================================
-# 十七、数据清洗
-# ============================================================
-
-st.subheader("5. 数据清洗")
-
-st.info(
-    "因变量缺失的样本无法用于监督建模，因此程序会直接删除；"
-    "缺失值填补仅针对自变量。"
-)
-
-typed_df = convert_types(
-    raw_df,
-    variable_types,
-)
-
-# 自动把被读取为文本的数字列转换为数值型
-for col in typed_df.columns:
-    if col == target:
-        continue
-
-    converted = pd.to_numeric(
-        typed_df[col].astype(str).str.strip(),
-        errors="coerce",
-    )
-
-    if converted.notna().mean() >= 0.8:
-        typed_df[col] = converted
-
-
-# 自动修正被读取为文本的数字列
-for col in typed_df.columns:
-    if col == target:
-        continue
-
-    converted = pd.to_numeric(
-        typed_df[col].astype(str).str.strip(),
-        errors="coerce",
-    )
-
-    if converted.notna().mean() >= 0.8:
-        typed_df[col] = converted
-
-
-before_missing_cells = int(
-    typed_df.isna().sum().sum()
-)
-
-target_missing_mask = typed_df[target].isna()
-deleted_target_missing_rows = int(
-    target_missing_mask.sum()
-)
-
-typed_df = typed_df.loc[
-    ~target_missing_mask
-].copy()
-
-predictor_variable_types = {
-    col: variable_types[col]
-    for col in predictors
-    if col in variable_types
-}
-
-(
-    clean_df,
-    missing_detail_table,
-    deleted_missing_rows,
-    imputed_cells,
-) = fill_missing_values(
-    typed_df,
-    predictor_variable_types,
-    missing_method,
-)
-
-numeric_columns_for_outlier = [
-    col
-    for col in [target] + predictors
-    if variable_types.get(col)
-    in ["连续", "次数"]
-]
-
-outlier_detail_table = pd.DataFrame()
-outlier_row_count = 0
-deleted_outlier_rows = 0
-
-if outlier_method != "不处理":
-    marked_df, outlier_detail_table = (
-        detect_outliers(
-            clean_df,
-            numeric_columns_for_outlier,
-            outlier_method,
-        )
-    )
-
-    outlier_row_count = int(
-        marked_df["_异常行"].sum()
-    )
-
-    if outlier_action == "删除异常行":
-        deleted_outlier_rows = outlier_row_count
-        clean_df = marked_df.loc[
-            ~marked_df["_异常行"]
-        ].copy()
-    else:
-        clean_df = marked_df.copy()
-
-else:
-    clean_df["_异常行"] = False
-
-used_columns = [target] + predictors
-
-if group_col != "无":
-    used_columns.append(group_col)
-
-if len(all_columns) > 0:
-    used_columns.append(all_columns[0])
-
-used_columns = list(dict.fromkeys(used_columns))
-
-unused_columns = [
-    col
-    for col in clean_df.columns
-    if (
-        col not in used_columns
-        and col != "_异常行"
-    )
-]
-
-clean_df = clean_df.drop(
-    columns=unused_columns,
-    errors="ignore",
-)
-
-after_missing_cells = int(
-    clean_df.isna().sum().sum()
-)
-
-clean_df = clean_df.reset_index(
-    drop=True
-)
-
-clean_data_for_model = clean_df.drop(
-    columns=["_异常行"],
-    errors="ignore",
-)
-
-cleaning_summary = pd.DataFrame(
-    {
-        "项目": [
-            "处理时间",
-            "赛题类型",
-            "原始行数",
-            "清洗后行数",
-            "原始列数",
-            "清洗后列数",
-            "原始缺失单元格数",
-            "缺失值插补数量",
-            "因变量缺失删除行数",
-            "自变量缺失删除行数",
-            "检测到的异常行数",
-            "因异常删除行数",
-            "清洗后剩余缺失单元格数",
-            "缺失值处理方式",
-            "异常值识别方法",
-            "异常值处理动作",
-            "重复观测分组变量",
-            "删除的无用列",
-        ],
-        "结果": [
-            datetime.now().strftime(
-                "%Y-%m-%d %H:%M:%S"
-            ),
-            problem_type or "未填写",
-            original_shape[0],
-            clean_data_for_model.shape[0],
-            original_shape[1],
-            clean_data_for_model.shape[1],
-            before_missing_cells,
-            imputed_cells,
-            deleted_target_missing_rows,
-            deleted_missing_rows,
-            outlier_row_count,
-            deleted_outlier_rows,
-            after_missing_cells,
-            missing_method,
-            outlier_method,
-            outlier_action,
-            group_col,
-            (
-                ", ".join(unused_columns)
-                if unused_columns
-                else "无"
-            ),
-        ],
-    }
-)
-
-clean_metric1, clean_metric2, clean_metric3, clean_metric4 = (
-    st.columns(4)
-)
-
-clean_metric1.metric(
-    "缺失值插补数量",
-    imputed_cells,
-)
-
-clean_metric2.metric(
-    "因缺失删除行数",
-    deleted_target_missing_rows
-    + deleted_missing_rows,
-)
-
-clean_metric3.metric(
-    "检测到异常行数",
-    outlier_row_count,
-)
-
-clean_metric4.metric(
-    "清洗后样本数",
-    clean_data_for_model.shape[0],
-)
-
-st.dataframe(
-    cleaning_summary,
-    use_container_width=True,
-)
-
-st.dataframe(
-    missing_detail_table,
-    use_container_width=True,
-)
-
-if not outlier_detail_table.empty:
-    st.dataframe(
-        outlier_detail_table,
-        use_container_width=True,
-    )
-
-st.dataframe(
-    clean_data_for_model.head(20),
-    use_container_width=True,
-)
-
-dataframe_download(
-    cleaning_summary,
-    "清洗汇总报告.csv",
-    key="download_cleaning_summary",
-)
-
-dataframe_download(
-    missing_detail_table,
-    "缺失值处理明细.csv",
-    key="download_missing_detail",
-)
-
-if not outlier_detail_table.empty:
-    dataframe_download(
-        outlier_detail_table,
-        "异常值处理明细.csv",
-        key="download_outlier_detail",
-    )
-
-dataframe_download(
-    clean_data_for_model,
-    "清洗后数据.csv",
-    key="download_clean_data",
-)
-
-cleaning_text = f"""
-本文首先对原始数据进行完整性、一致性和变量类型检查。
-原始数据共包含{original_shape[0]}条样本和{original_shape[1]}个变量。
-针对缺失数据，本文采用“{missing_method}”方法进行处理，
-共插补{imputed_cells}个缺失单元格。
-对于因变量缺失的样本，由于无法提供有效的被解释变量观测值，
-直接删除{deleted_target_missing_rows}条样本；
-另外因自变量缺失处理删除{deleted_missing_rows}条样本。
-针对异常数据，本文采用“{outlier_method}”方法进行识别，
-共检测到{outlier_row_count}条异常样本，
-其中因异常值删除{deleted_outlier_rows}条样本。
-经过数据类型转换、缺失值处理、异常值处理和无用列处理后，
-最终获得{clean_data_for_model.shape[0]}条有效样本，
-用于后续统计分析和模型建立。
-""".strip()
-
-st.text_area(
-    "可直接用于论文的数据清洗表述",
-    cleaning_text,
-    height=220,
-    key="cleaning_text_area",
-)
-
-
-# ============================================================
-# 十八、数据可视化
-# ============================================================
-
-st.subheader("6. 数据可视化")
-
-numeric_variables = [
-    col
-    for col in [target] + predictors
-    if (
-        variable_types.get(col)
-        in ["连续", "次数"]
-        and col in clean_data_for_model.columns
-    )
-]
-
-categorical_variables = [
-    col
-    for col in [target] + predictors
-    if (
-        variable_types.get(col) == "分类"
-        and col in clean_data_for_model.columns
-    )
-]
-
-chart_type = st.selectbox(
-    "选择图形类型",
-    [
-        "变量分布图",
-        "变量箱线图",
-        "因变量-自变量散点图",
-        "因变量-自变量曲线图",
-        "数值变量相关性热力图",
-        "分类变量频数图",
-    ],
-)
-
-if chart_type == "变量分布图":
-    if not numeric_variables:
-        st.info("当前没有连续型或次数型变量。")
-    else:
-        selected_col = st.selectbox(
-            "选择变量",
-            numeric_variables,
-            key="histogram_column",
-        )
-
-        values = pd.to_numeric(
-            clean_data_for_model[selected_col],
+        converted = pd.to_numeric(
+            typed_df[col].astype(str).str.strip(),
             errors="coerce",
-        ).dropna()
-
-        fig, ax = plt.subplots(
-            figsize=(8, 5)
         )
 
-        sns.histplot(
-            values,
-            kde=True,
-            ax=ax,
+        if converted.notna().mean() >= 0.8:
+            typed_df[col] = converted
+
+
+    # 自动修正被读取为文本的数字列
+    for col in typed_df.columns:
+        if col == target:
+            continue
+
+        converted = pd.to_numeric(
+            typed_df[col].astype(str).str.strip(),
+            errors="coerce",
         )
 
-        ax.set_title(
-            f"{selected_col} 分布图"
+        if converted.notna().mean() >= 0.8:
+            typed_df[col] = converted
+
+
+    before_missing_cells = int(
+        typed_df.isna().sum().sum()
+    )
+
+    target_missing_mask = typed_df[target].isna()
+    deleted_target_missing_rows = int(
+        target_missing_mask.sum()
+    )
+
+    typed_df = typed_df.loc[
+        ~target_missing_mask
+    ].copy()
+
+    predictor_variable_types = {
+        col: variable_types[col]
+        for col in predictors
+        if col in variable_types
+    }
+
+    (
+        clean_df,
+        missing_detail_table,
+        deleted_missing_rows,
+        imputed_cells,
+    ) = fill_missing_values(
+        typed_df,
+        predictor_variable_types,
+        missing_method,
+    )
+
+    numeric_columns_for_outlier = [
+        col
+        for col in [target] + predictors
+        if variable_types.get(col)
+        in ["连续", "次数"]
+    ]
+
+    outlier_detail_table = pd.DataFrame()
+    outlier_row_count = 0
+    deleted_outlier_rows = 0
+
+    if outlier_method != "不处理":
+        marked_df, outlier_detail_table = (
+            detect_outliers(
+                clean_df,
+                numeric_columns_for_outlier,
+                outlier_method,
+            )
         )
-        ax.set_xlabel(selected_col)
 
-        st.pyplot(fig)
-        plt.close(fig)
+        outlier_row_count = int(
+            marked_df["_异常行"].sum()
+        )
 
-elif chart_type == "变量箱线图":
-    if not numeric_variables:
-        st.info("当前没有连续型或次数型变量。")
+        if outlier_action == "删除异常行":
+            deleted_outlier_rows = outlier_row_count
+            clean_df = marked_df.loc[
+                ~marked_df["_异常行"]
+            ].copy()
+        else:
+            clean_df = marked_df.copy()
+
     else:
-        selected_columns = st.multiselect(
-            "选择变量",
-            numeric_variables,
-            default=numeric_variables,
-            key="boxplot_columns",
+        clean_df["_异常行"] = False
+
+    used_columns = [target] + predictors
+
+    if group_col != "无":
+        used_columns.append(group_col)
+
+    if len(all_columns) > 0:
+        used_columns.append(all_columns[0])
+
+    used_columns = list(dict.fromkeys(used_columns))
+
+    unused_columns = [
+        col
+        for col in clean_df.columns
+        if (
+            col not in used_columns
+            and col != "_异常行"
+        )
+    ]
+
+    clean_df = clean_df.drop(
+        columns=unused_columns,
+        errors="ignore",
+    )
+
+    after_missing_cells = int(
+        clean_df.isna().sum().sum()
+    )
+
+    clean_df = clean_df.reset_index(
+        drop=True
+    )
+
+    clean_data_for_model = clean_df.drop(
+        columns=["_异常行"],
+        errors="ignore",
+    )
+
+    cleaning_summary = pd.DataFrame(
+        {
+            "项目": [
+                "处理时间",
+                "赛题类型",
+                "原始行数",
+                "清洗后行数",
+                "原始列数",
+                "清洗后列数",
+                "原始缺失单元格数",
+                "缺失值插补数量",
+                "因变量缺失删除行数",
+                "自变量缺失删除行数",
+                "检测到的异常行数",
+                "因异常删除行数",
+                "清洗后剩余缺失单元格数",
+                "缺失值处理方式",
+                "异常值识别方法",
+                "异常值处理动作",
+                "重复观测分组变量",
+                "删除的无用列",
+            ],
+            "结果": [
+                datetime.now().strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                ),
+                problem_type or "未填写",
+                original_shape[0],
+                clean_data_for_model.shape[0],
+                original_shape[1],
+                clean_data_for_model.shape[1],
+                before_missing_cells,
+                imputed_cells,
+                deleted_target_missing_rows,
+                deleted_missing_rows,
+                outlier_row_count,
+                deleted_outlier_rows,
+                after_missing_cells,
+                missing_method,
+                outlier_method,
+                outlier_action,
+                group_col,
+                (
+                    ", ".join(unused_columns)
+                    if unused_columns
+                    else "无"
+                ),
+            ],
+        }
+    )
+
+    clean_metric1, clean_metric2, clean_metric3, clean_metric4 = (
+        st.columns(4)
+    )
+
+    clean_metric1.metric(
+        "缺失值插补数量",
+        imputed_cells,
+    )
+
+    clean_metric2.metric(
+        "因缺失删除行数",
+        deleted_target_missing_rows
+        + deleted_missing_rows,
+    )
+
+    clean_metric3.metric(
+        "检测到异常行数",
+        outlier_row_count,
+    )
+
+    clean_metric4.metric(
+        "清洗后样本数",
+        clean_data_for_model.shape[0],
+    )
+
+    st.dataframe(
+        cleaning_summary,
+        use_container_width=True,
+    )
+
+    st.dataframe(
+        missing_detail_table,
+        use_container_width=True,
+    )
+
+    if not outlier_detail_table.empty:
+        st.dataframe(
+            outlier_detail_table,
+            use_container_width=True,
         )
 
-        if selected_columns:
-            fig, ax = plt.subplots(
-                figsize=(10, 5)
+    st.dataframe(
+        clean_data_for_model.head(20),
+        use_container_width=True,
+    )
+
+    dataframe_download(
+        cleaning_summary,
+        "清洗汇总报告.csv",
+        key="download_cleaning_summary",
+    )
+
+    dataframe_download(
+        missing_detail_table,
+        "缺失值处理明细.csv",
+        key="download_missing_detail",
+    )
+
+    if not outlier_detail_table.empty:
+        dataframe_download(
+            outlier_detail_table,
+            "异常值处理明细.csv",
+            key="download_outlier_detail",
+        )
+
+    dataframe_download(
+        clean_data_for_model,
+        "清洗后数据.csv",
+        key="download_clean_data",
+    )
+
+    cleaning_text = f"""
+    本文首先对原始数据进行完整性、一致性和变量类型检查。
+    原始数据共包含{original_shape[0]}条样本和{original_shape[1]}个变量。
+    针对缺失数据，本文采用“{missing_method}”方法进行处理，
+    共插补{imputed_cells}个缺失单元格。
+    对于因变量缺失的样本，由于无法提供有效的被解释变量观测值，
+    直接删除{deleted_target_missing_rows}条样本；
+    另外因自变量缺失处理删除{deleted_missing_rows}条样本。
+    针对异常数据，本文采用“{outlier_method}”方法进行识别，
+    共检测到{outlier_row_count}条异常样本，
+    其中因异常值删除{deleted_outlier_rows}条样本。
+    经过数据类型转换、缺失值处理、异常值处理和无用列处理后，
+    最终获得{clean_data_for_model.shape[0]}条有效样本，
+    用于后续统计分析和模型建立。
+    """.strip()
+
+    st.text_area(
+        "可直接用于论文的数据清洗表述",
+        cleaning_text,
+        height=220,
+        key="cleaning_text_area",
+    )
+
+
+    # ============================================================
+    # 十八、数据可视化
+    # ============================================================
+
+    st.subheader("6. 数据可视化")
+
+    numeric_variables = [
+        col
+        for col in [target] + predictors
+        if (
+            variable_types.get(col)
+            in ["连续", "次数"]
+            and col in clean_data_for_model.columns
+        )
+    ]
+
+    categorical_variables = [
+        col
+        for col in [target] + predictors
+        if (
+            variable_types.get(col) == "分类"
+            and col in clean_data_for_model.columns
+        )
+    ]
+
+    chart_type = st.selectbox(
+        "选择图形类型",
+        [
+            "变量分布图",
+            "变量箱线图",
+            "因变量-自变量散点图",
+            "因变量-自变量曲线图",
+            "数值变量相关性热力图",
+            "分类变量频数图",
+        ],
+    )
+
+    if chart_type == "变量分布图":
+        if not numeric_variables:
+            st.info("当前没有连续型或次数型变量。")
+        else:
+            selected_col = st.selectbox(
+                "选择变量",
+                numeric_variables,
+                key="histogram_column",
             )
 
-            sns.boxplot(
-                data=clean_data_for_model[
-                    selected_columns
-                ],
+            values = pd.to_numeric(
+                clean_data_for_model[selected_col],
+                errors="coerce",
+            ).dropna()
+
+            fig, ax = plt.subplots(
+                figsize=(8, 5)
+            )
+
+            sns.histplot(
+                values,
+                kde=True,
+                ax=ax,
+            )
+
+            ax.set_title(
+                f"{selected_col} 分布图"
+            )
+            ax.set_xlabel(selected_col)
+
+            st.pyplot(fig)
+            plt.close(fig)
+
+    elif chart_type == "变量箱线图":
+        if not numeric_variables:
+            st.info("当前没有连续型或次数型变量。")
+        else:
+            selected_columns = st.multiselect(
+                "选择变量",
+                numeric_variables,
+                default=numeric_variables,
+                key="boxplot_columns",
+            )
+
+            if selected_columns:
+                fig, ax = plt.subplots(
+                    figsize=(10, 5)
+                )
+
+                sns.boxplot(
+                    data=clean_data_for_model[
+                        selected_columns
+                    ],
+                    ax=ax,
+                )
+
+                ax.tick_params(
+                    axis="x",
+                    rotation=35,
+                )
+
+                ax.set_title("变量箱线图")
+
+                st.pyplot(fig)
+                plt.close(fig)
+
+    elif chart_type == "因变量-自变量散点图":
+        x_candidates = [
+            col
+            for col in numeric_variables
+            if col != target
+        ]
+
+        if not x_candidates:
+            st.info(
+                "没有适合绘制散点图的数值型自变量。"
+            )
+        else:
+            x_col = st.selectbox(
+                "选择横轴自变量",
+                x_candidates,
+                key="scatter_x",
+            )
+
+            plot_df = clean_data_for_model[
+                [x_col, target]
+            ].copy()
+
+            plot_df[x_col] = pd.to_numeric(
+                plot_df[x_col],
+                errors="coerce",
+            )
+
+            plot_df[target] = pd.to_numeric(
+                plot_df[target],
+                errors="coerce",
+            )
+
+            plot_df = plot_df.dropna()
+
+            fig, ax = plt.subplots(
+                figsize=(8, 5)
+            )
+
+            sns.scatterplot(
+                data=plot_df,
+                x=x_col,
+                y=target,
+                ax=ax,
+            )
+
+            ax.set_title(
+                f"{target} 与 {x_col} 的散点图"
+            )
+
+            st.pyplot(fig)
+            plt.close(fig)
+
+    elif chart_type == "因变量-自变量曲线图":
+        x_candidates = [
+            col
+            for col in numeric_variables
+            if col != target
+        ]
+
+        if not x_candidates:
+            st.info(
+                "没有适合绘制曲线图的数值型自变量。"
+            )
+        else:
+            x_col = st.selectbox(
+                "选择横轴自变量",
+                x_candidates,
+                key="curve_x",
+            )
+
+            plot_df = clean_data_for_model[
+                [x_col, target]
+            ].copy()
+
+            plot_df[x_col] = pd.to_numeric(
+                plot_df[x_col],
+                errors="coerce",
+            )
+
+            plot_df[target] = pd.to_numeric(
+                plot_df[target],
+                errors="coerce",
+            )
+
+            plot_df = (
+                plot_df.dropna()
+                .sort_values(x_col)
+            )
+
+            fig, ax = plt.subplots(
+                figsize=(8, 5)
+            )
+
+            ax.plot(
+                plot_df[x_col],
+                plot_df[target],
+                marker="o",
+                linewidth=1.5,
+            )
+
+            ax.set_xlabel(x_col)
+            ax.set_ylabel(target)
+            ax.set_title(
+                f"{target} 与 {x_col} 的变化曲线"
+            )
+
+            st.pyplot(fig)
+            plt.close(fig)
+
+    elif chart_type == "数值变量相关性热力图":
+        if len(numeric_variables) < 2:
+            st.info("至少需要两个数值型变量。")
+        else:
+            corr = clean_data_for_model[
+                numeric_variables
+            ].corr()
+
+            fig, ax = plt.subplots(
+                figsize=(10, 7)
+            )
+
+            sns.heatmap(
+                corr,
+                annot=True,
+                cmap="coolwarm",
+                fmt=".2f",
+                ax=ax,
+            )
+
+            ax.set_title(
+                "数值变量Pearson相关性热力图"
+            )
+
+            st.pyplot(fig)
+            plt.close(fig)
+
+    elif chart_type == "分类变量频数图":
+        if not categorical_variables:
+            st.info("当前没有分类变量。")
+        else:
+            selected_col = st.selectbox(
+                "选择分类变量",
+                categorical_variables,
+                key="count_column",
+            )
+
+            count_table = (
+                clean_data_for_model[selected_col]
+                .astype("string")
+                .value_counts(dropna=False)
+                .rename_axis(selected_col)
+                .reset_index(name="数量")
+            )
+
+            fig, ax = plt.subplots(
+                figsize=(9, 5)
+            )
+
+            sns.barplot(
+                data=count_table,
+                x=selected_col,
+                y="数量",
                 ax=ax,
             )
 
@@ -3288,1058 +3473,1072 @@ elif chart_type == "变量箱线图":
                 rotation=35,
             )
 
-            ax.set_title("变量箱线图")
+            ax.set_title(
+                f"{selected_col} 频数图"
+            )
 
             st.pyplot(fig)
             plt.close(fig)
 
-elif chart_type == "因变量-自变量散点图":
-    x_candidates = [
-        col
-        for col in numeric_variables
-        if col != target
-    ]
 
-    if not x_candidates:
-        st.info(
-            "没有适合绘制散点图的数值型自变量。"
-        )
-    else:
-        x_col = st.selectbox(
-            "选择横轴自变量",
-            x_candidates,
-            key="scatter_x",
-        )
+    # ============================================================
+    # 十九、相关性分析
+    # ============================================================
 
-        plot_df = clean_data_for_model[
-            [x_col, target]
-        ].copy()
+    st.subheader("7. 相关性分析")
 
-        plot_df[x_col] = pd.to_numeric(
-            plot_df[x_col],
-            errors="coerce",
-        )
-
-        plot_df[target] = pd.to_numeric(
-            plot_df[target],
-            errors="coerce",
-        )
-
-        plot_df = plot_df.dropna()
-
-        fig, ax = plt.subplots(
-            figsize=(8, 5)
-        )
-
-        sns.scatterplot(
-            data=plot_df,
-            x=x_col,
-            y=target,
-            ax=ax,
-        )
-
-        ax.set_title(
-            f"{target} 与 {x_col} 的散点图"
-        )
-
-        st.pyplot(fig)
-        plt.close(fig)
-
-elif chart_type == "因变量-自变量曲线图":
-    x_candidates = [
-        col
-        for col in numeric_variables
-        if col != target
-    ]
-
-    if not x_candidates:
-        st.info(
-            "没有适合绘制曲线图的数值型自变量。"
-        )
-    else:
-        x_col = st.selectbox(
-            "选择横轴自变量",
-            x_candidates,
-            key="curve_x",
-        )
-
-        plot_df = clean_data_for_model[
-            [x_col, target]
-        ].copy()
-
-        plot_df[x_col] = pd.to_numeric(
-            plot_df[x_col],
-            errors="coerce",
-        )
-
-        plot_df[target] = pd.to_numeric(
-            plot_df[target],
-            errors="coerce",
-        )
-
-        plot_df = (
-            plot_df.dropna()
-            .sort_values(x_col)
-        )
-
-        fig, ax = plt.subplots(
-            figsize=(8, 5)
-        )
-
-        ax.plot(
-            plot_df[x_col],
-            plot_df[target],
-            marker="o",
-            linewidth=1.5,
-        )
-
-        ax.set_xlabel(x_col)
-        ax.set_ylabel(target)
-        ax.set_title(
-            f"{target} 与 {x_col} 的变化曲线"
-        )
-
-        st.pyplot(fig)
-        plt.close(fig)
-
-elif chart_type == "数值变量相关性热力图":
-    if len(numeric_variables) < 2:
-        st.info("至少需要两个数值型变量。")
-    else:
-        corr = clean_data_for_model[
-            numeric_variables
-        ].corr()
-
-        fig, ax = plt.subplots(
-            figsize=(10, 7)
-        )
-
-        sns.heatmap(
-            corr,
-            annot=True,
-            cmap="coolwarm",
-            fmt=".2f",
-            ax=ax,
-        )
-
-        ax.set_title(
-            "数值变量Pearson相关性热力图"
-        )
-
-        st.pyplot(fig)
-        plt.close(fig)
-
-elif chart_type == "分类变量频数图":
-    if not categorical_variables:
-        st.info("当前没有分类变量。")
-    else:
-        selected_col = st.selectbox(
-            "选择分类变量",
-            categorical_variables,
-            key="count_column",
-        )
-
-        count_table = (
-            clean_data_for_model[selected_col]
-            .astype("string")
-            .value_counts(dropna=False)
-            .rename_axis(selected_col)
-            .reset_index(name="数量")
-        )
-
-        fig, ax = plt.subplots(
-            figsize=(9, 5)
-        )
-
-        sns.barplot(
-            data=count_table,
-            x=selected_col,
-            y="数量",
-            ax=ax,
-        )
-
-        ax.tick_params(
-            axis="x",
-            rotation=35,
-        )
-
-        ax.set_title(
-            f"{selected_col} 频数图"
-        )
-
-        st.pyplot(fig)
-        plt.close(fig)
-
-
-# ============================================================
-# 十九、相关性分析
-# ============================================================
-
-st.subheader("7. 相关性分析")
-
-corr_table = correlation_table(
-    clean_data_for_model,
-    target,
-    predictors,
-    variable_types,
-)
-
-if corr_table.empty:
-    st.info(
-        "没有足够的连续型或次数型变量用于相关性分析。"
-    )
-else:
-    st.dataframe(
-        corr_table,
-        use_container_width=True,
-    )
-
-    dataframe_download(
-        corr_table,
-        "相关性分析.csv",
-        key="download_correlation",
-    )
-
-
-# ============================================================
-# 二十、模型构造和推荐
-# ============================================================
-
-st.subheader("8. 自动模型推荐与人工确认")
-
-try:
-    y, X, groups, model_meta = build_model_data(
+    corr_table = correlation_table(
         clean_data_for_model,
         target,
         predictors,
         variable_types,
-        group_col=group_col,
     )
 
-    if len(y) <= X.shape[1]:
-        st.error(
-            "有效样本数不大于模型参数数量，无法稳定建立模型。"
-        )
-        st.stop()
-
-    matrix_rank = np.linalg.matrix_rank(
-        X.values
-    )
-
-    if matrix_rank < X.shape[1]:
-        st.warning(
-            "设计矩阵可能存在完全多重共线性，部分参数可能无法稳定估计。"
-        )
-
-    target_type_for_model = variable_types.get(target, "分类")
-
-    # 统一变量类型名称，避免类型名称不一致导致模型推荐为“未识别”
-    type_aliases = {
-        "连续型": "连续",
-        "次数型": "次数",
-        "数值": "连续",
-        "数值型": "连续",
-        "类别": "分类",
-        "分类变量": "分类",
-    }
-    target_type_for_model = type_aliases.get(
-        target_type_for_model,
-        target_type_for_model,
-    )
-
-    recommended_info = detect_model_type(
-        y,
-        target_type_for_model,
-        groups=groups,
-    )
-
-    # 对未识别类型提供明确的兜底推荐
-    if recommended_info.get("model_type") == "未识别":
-        if target_type_for_model == "连续":
-            recommended_info = {
-                "model_type": "线性回归",
-                "reason": "目标变量被设置为连续型变量。",
-            }
-        elif target_type_for_model == "次数":
-            recommended_info = {
-                "model_type": "泊松回归",
-                "reason": "目标变量被设置为次数型变量。",
-            }
-        elif target_type_for_model == "分类":
-            unique_count = len(np.unique(y))
-            if unique_count <= 2:
-                model_name = "二元逻辑回归"
-            else:
-                model_name = "多项逻辑回归"
-            recommended_info = {
-                "model_type": model_name,
-                "reason": "目标变量被设置为分类变量。",
-            }
-
-    recommended_model = recommended_info[
-        "model_type"
-    ]
-
-    st.info(
-        f"程序推荐模型：**{recommended_model}**\n\n"
-        f"判断依据：{recommended_info['reason']}"
-    )
-
-    recommended_index = (
-        MODEL_OPTIONS.index(
-            recommended_model
-        )
-        if recommended_model in MODEL_OPTIONS
-        else 0
-    )
-
-    final_model_type = st.selectbox(
-        "请选择最终拟合模型",
-        MODEL_OPTIONS,
-        index=recommended_index,
-        key="final_model_selector",
-    )
-
-    # 重要修复：
-    # 统一使用 final_model_type，不再使用未定义的 model_type。
-    model_type = final_model_type
-
-    previous_model_type = st.session_state.get(
-        "selected_model_type"
-    )
-
-    if (
-        previous_model_type is not None
-        and previous_model_type != final_model_type
-    ):
-        clear_model_session_state()
-
-    st.session_state["selected_model_type"] = (
-        final_model_type
-    )
-
-    if (
-        final_model_type
-        in [
-            "线性混合效应模型",
-            "比例型混合效应模型",
-        ]
-        and group_col == "无"
-    ):
-        st.error(
-            "当前模型需要分组变量，请先选择重复观测分组变量。"
-        )
-        st.stop()
-
-    vif_table = calculate_vif(X)
-
-    st.write("多重共线性诊断")
-
-    if vif_table.empty:
+    if corr_table.empty:
         st.info(
-            "当前没有足够的自变量计算 VIF。"
+            "没有足够的连续型或次数型变量用于相关性分析。"
         )
     else:
         st.dataframe(
-            vif_table,
+            corr_table,
             use_container_width=True,
         )
 
         dataframe_download(
-            vif_table,
-            "VIF多重共线性诊断.csv",
-            key="download_vif",
+            corr_table,
+            "相关性分析.csv",
+            key="download_correlation",
         )
 
-    fit_button = st.button(
-        "开始拟合最终模型",
-        type="primary",
-        key="fit_final_model",
-    )
 
-    if fit_button:
-        is_valid, validation_message = (
-            validate_model_selection(
-                y=y,
-                target_type=variable_types[target],
-                model_type=final_model_type,
-                groups=groups,
-            )
-        )
+    # ============================================================
+    # 二十、模型构造和推荐
+    # ============================================================
 
-        if not is_valid:
-            st.error(validation_message)
-            st.stop()
+    st.subheader("8. 自动模型推荐与人工确认")
 
-        try:
-            new_fitted_result = fit_model(
-                y,
-                X,
-                groups,
-                final_model_type,
-                robust_se=robust_se,
-            )
-
-            st.session_state[
-                "fitted_result"
-            ] = new_fitted_result
-
-            st.session_state[
-                "fitted_model"
-            ] = new_fitted_result["model"]
-
-            st.session_state[
-                "final_model_type"
-            ] = final_model_type
-
-            st.session_state[
-                "model_meta"
-            ] = model_meta
-
-            st.session_state[
-                "X_for_assumption"
-            ] = X
-
-            st.session_state[
-                "vif_table"
-            ] = vif_table
-
-            st.session_state[
-                "target_mapping"
-            ] = model_meta.get(
-                "target_mapping"
-            )
-
-            st.success(
-                "模型拟合完成，结果已经保存。"
-            )
-
-        except Exception as exc:
-            st.error(
-                f"模型拟合失败：{exc}"
-            )
-
-    # 重要修复：
-    # 每次页面重新运行时从 session_state 恢复模型结果。
-    fitted_result = st.session_state.get(
-        "fitted_result"
-    )
-
-    fitted_model = st.session_state.get(
-        "fitted_model"
-    )
-
-    stored_model_type = st.session_state.get(
-        "final_model_type",
-        final_model_type,
-    )
-
-    # --------------------------------------------------------
-    # 模型结果
-    # --------------------------------------------------------
-
-    if fitted_result is None:
-        st.info(
-            '请点击“开始拟合最终模型”后查看模型结果。'
-        )
-
-    else:
-        st.subheader("9. 模型结果")
-
-        mapping = st.session_state.get(
-            "target_mapping"
-        )
-
-        if mapping:
-            st.write("分类因变量编码映射")
-
-            mapping_table = pd.DataFrame(
-                {
-                    "原始类别": list(
-                        mapping.keys()
-                    ),
-                    "模型编码": list(
-                        mapping.values()
-                    ),
-                }
-            )
-
-            st.dataframe(
-                mapping_table,
-                use_container_width=True,
-            )
-
-        if model_is_converged(fitted_model):
-            st.success(
-                "模型已收敛或未检测到明显收敛问题。"
-            )
-        else:
-            st.warning(
-                "模型未收敛，当前系数、P值和预测结果不建议直接用于论文。"
-            )
-
-        metric_table = make_metric_table(
-            fitted_result
-        )
-
-        st.write("模型评价指标")
-        st.dataframe(
-            metric_table,
-            use_container_width=True,
-        )
-
-        dataframe_download(
-            metric_table,
-            "模型评价指标.csv",
-            key="download_model_metrics",
-        )
-
-        result_table = make_result_table(
-            fitted_model,
-            stored_model_type,
-        )
-
-        st.write("模型系数结果")
-        st.dataframe(
-            result_table,
-            use_container_width=True,
-        )
-
-        dataframe_download(
-            result_table,
-            "模型系数结果.csv",
-            key="download_model_coefficients",
-        )
-
-        prediction_table = create_prediction_table(
-            fitted_result
-        )
-
-        st.write(
-            "实际值、预测值与残差"
-        )
-
-        st.dataframe(
-            prediction_table.head(100),
-            use_container_width=True,
-        )
-
-        dataframe_download(
-            prediction_table,
-            "实际值预测值残差.csv",
-            key="download_prediction_table",
-        )
-
-        # ----------------------------------------------------
-        # 训练集 / 测试集评估
-        # ----------------------------------------------------
-
-        st.subheader(
-            "训练集/测试集评估"
-        )
-
-        if not use_test_set:
-            st.info(
-                "当前已关闭训练集/测试集评估。"
-                "上方模型评价指标为样本内指标。"
-            )
-
-        elif stored_model_type in [
-            "线性混合效应模型",
-            "比例型混合效应模型",
-        ]:
-            st.info(
-                "混合效应模型暂未采用普通随机划分，"
-                "建议按照分组变量进行分组交叉验证。"
-            )
-
-        else:
-            try:
-                if len(y) < 10:
-                    st.warning(
-                        "样本量少于10，训练集/测试集划分结果可能不稳定。"
-                    )
-
-                indices = np.arange(len(y))
-
-                train_index, test_index = (
-                    train_test_split(
-                        indices,
-                        test_size=test_size,
-                        random_state=42,
-                    )
-                )
-
-                y_train = y.iloc[train_index]
-                y_test = y.iloc[test_index]
-
-                X_train = X.iloc[train_index]
-                X_test = X.iloc[test_index]
-
-                test_model_result = fit_model(
-                    y_train,
-                    X_train,
-                    None,
-                    stored_model_type,
-                    robust_se=robust_se,
-                )
-
-                test_model = test_model_result[
-                    "model"
-                ]
-
-                if stored_model_type == (
-                    "二项Logistic回归"
-                ):
-                    test_probability = np.asarray(
-                        test_model.predict(X_test),
-                        dtype=float,
-                    )
-
-                    test_class = (
-                        test_probability >= 0.5
-                    ).astype(int)
-
-                    test_metrics = [
-                        "准确率",
-                        "平衡准确率",
-                        "精确率",
-                        "召回率",
-                        "F1值",
-                        "Log Loss",
-                    ]
-
-                    test_values = [
-                        accuracy_score(
-                            y_test.astype(int),
-                            test_class,
-                        ),
-                        balanced_accuracy_score(
-                            y_test.astype(int),
-                            test_class,
-                        ),
-                        precision_score(
-                            y_test.astype(int),
-                            test_class,
-                            zero_division=0,
-                        ),
-                        recall_score(
-                            y_test.astype(int),
-                            test_class,
-                            zero_division=0,
-                        ),
-                        f1_score(
-                            y_test.astype(int),
-                            test_class,
-                            zero_division=0,
-                        ),
-                        log_loss(
-                            y_test.astype(int),
-                            test_probability,
-                        ),
-                    ]
-
-                    if len(
-                        np.unique(
-                            y_test
-                        )
-                    ) == 2:
-                        test_metrics.append(
-                            "ROC-AUC"
-                        )
-                        test_values.append(
-                            roc_auc_score(
-                                y_test,
-                                test_probability,
-                            )
-                        )
-
-                elif stored_model_type == (
-                    "多项Logistic回归"
-                ):
-                    probability = np.asarray(
-                        test_model.predict(X_test)
-                    )
-
-                    test_class = (
-                        probability.argmax(axis=1)
-                    )
-
-                    test_metrics = [
-                        "准确率",
-                        "平衡准确率",
-                        "宏平均F1",
-                    ]
-
-                    test_values = [
-                        accuracy_score(
-                            y_test.astype(int),
-                            test_class,
-                        ),
-                        balanced_accuracy_score(
-                            y_test.astype(int),
-                            test_class,
-                        ),
-                        f1_score(
-                            y_test.astype(int),
-                            test_class,
-                            average="macro",
-                            zero_division=0,
-                        ),
-                    ]
-
-                else:
-                    test_prediction = np.asarray(
-                        test_model.predict(X_test),
-                        dtype=float,
-                    )
-
-                    test_metrics = [
-                        "RMSE",
-                        "MAE",
-                        "R²",
-                    ]
-
-                    test_values = [
-                        np.sqrt(
-                            mean_squared_error(
-                                y_test,
-                                test_prediction,
-                            )
-                        ),
-                        mean_absolute_error(
-                            y_test,
-                            test_prediction,
-                        ),
-                        r2_score(
-                            y_test,
-                            test_prediction,
-                        ),
-                    ]
-
-                test_metric_table = pd.DataFrame(
-                    {
-                        "测试集指标": test_metrics,
-                        "数值": test_values,
-                    }
-                )
-
-                st.dataframe(
-                    test_metric_table,
-                    use_container_width=True,
-                )
-
-                dataframe_download(
-                    test_metric_table,
-                    "测试集评价指标.csv",
-                    key="download_test_metrics",
-                )
-
-            except Exception as exc:
-                st.warning(
-                    f"测试集评估失败：{exc}"
-                )
-
-        # ----------------------------------------------------
-        # 线性模型诊断
-        # ----------------------------------------------------
-
-        if stored_model_type in [
-            "多元线性回归",
-            "Logit变换线性回归",
-        ]:
-            st.subheader("线性模型诊断")
-
-            diagnostic_table = (
-                make_diagnostic_table(
-                    fitted_model
-                )
-            )
-
-            st.dataframe(
-                diagnostic_table,
-                use_container_width=True,
-            )
-
-            dataframe_download(
-                diagnostic_table,
-                "线性模型诊断.csv",
-                key="download_diagnostic_table",
-            )
-
-            residuals = np.asarray(
-                fitted_model.resid,
-                dtype=float,
-            )
-
-            fitted_values = np.asarray(
-                fitted_model.fittedvalues,
-                dtype=float,
-            )
-
-            diag_col1, diag_col2 = st.columns(2)
-
-            with diag_col1:
-                fig_residual, ax_residual = (
-                    plt.subplots(
-                        figsize=(7, 5)
-                    )
-                )
-
-                sns.scatterplot(
-                    x=fitted_values,
-                    y=residuals,
-                    ax=ax_residual,
-                )
-
-                ax_residual.axhline(
-                    0,
-                    color="red",
-                    linestyle="--",
-                )
-
-                ax_residual.set_xlabel(
-                    "拟合值"
-                )
-                ax_residual.set_ylabel(
-                    "残差"
-                )
-                ax_residual.set_title(
-                    "残差-拟合值图"
-                )
-
-                st.pyplot(fig_residual)
-                plt.close(fig_residual)
-
-            with diag_col2:
-                fig_qq, ax_qq = plt.subplots(
-                    figsize=(7, 5)
-                )
-
-                probplot(
-                    residuals,
-                    dist="norm",
-                    plot=ax_qq,
-                )
-
-                ax_qq.set_title(
-                    "残差正态QQ图"
-                )
-
-                st.pyplot(fig_qq)
-                plt.close(fig_qq)
-
-            try:
-                influence = OLSInfluence(
-                    fitted_model
-                )
-
-                cooks_distance = (
-                    influence.cooks_distance[0]
-                )
-
-                cooks_table = pd.DataFrame(
-                    {
-                        "样本序号": np.arange(
-                            len(cooks_distance)
-                        ),
-                        "Cook距离": cooks_distance,
-                    }
-                ).sort_values(
-                    "Cook距离",
-                    ascending=False,
-                )
-
-                st.write(
-                    "Cook距离较大的观测"
-                )
-
-                st.dataframe(
-                    cooks_table.head(20),
-                    use_container_width=True,
-                )
-
-                dataframe_download(
-                    cooks_table,
-                    "Cook距离.csv",
-                    key="download_cooks_distance",
-                )
-
-            except Exception as exc:
-                st.info(
-                    f"Cook距离计算失败：{exc}"
-                )
-
-        # ----------------------------------------------------
-        # 分类模型诊断
-        # ----------------------------------------------------
-
-        if stored_model_type == (
-            "二项Logistic回归"
-        ):
-            st.subheader(
-                "二分类模型诊断"
-            )
-
-            cm = confusion_matrix(
-                prediction_table[
-                    "实际值"
-                ].astype(int),
-                prediction_table[
-                    "预测类别"
-                ].astype(int),
-            )
-
-            cm_index = [
-                f"真实{i}"
-                for i in range(cm.shape[0])
-            ]
-
-            cm_columns = [
-                f"预测{i}"
-                for i in range(cm.shape[1])
-            ]
-
-            cm_table = pd.DataFrame(
-                cm,
-                index=cm_index,
-                columns=cm_columns,
-            )
-
-            st.write("混淆矩阵")
-            st.dataframe(
-                cm_table,
-                use_container_width=True,
-            )
-
-            dataframe_download(
-                cm_table.reset_index(),
-                "二分类混淆矩阵.csv",
-                key="download_confusion_matrix",
-            )
-
-        # ----------------------------------------------------
-        # 模型假设
-        # ----------------------------------------------------
-
-        st.subheader("10. 模型假设")
-
-        assumptions = generate_assumptions(
+    try:
+        y, X, groups, model_meta = build_model_data(
+            clean_data_for_model,
             target,
             predictors,
             variable_types,
-            stored_model_type,
-            vif_table=st.session_state.get(
-                "vif_table",
-                vif_table,
-            ),
             group_col=group_col,
         )
 
-        assumptions_text = "\n".join(
-            [
-                f"{index + 1}. {text}"
-                for index, text in enumerate(
-                    assumptions
-                )
-            ]
+        if len(y) <= X.shape[1]:
+            st.error(
+                "有效样本数不大于模型参数数量，无法稳定建立模型。"
+            )
+            st.stop()
+
+        matrix_rank = np.linalg.matrix_rank(
+            X.values
         )
 
-        st.text_area(
-            "可直接复制到论文的模型假设",
-            assumptions_text,
-            height=350,
-            key="assumptions_text_area",
-        )
-
-        # ----------------------------------------------------
-        # 论文表述草稿
-        # ----------------------------------------------------
-
-        st.subheader("11. 论文表述草稿")
-
-        paper_text = f"""
-本文首先对原始数据进行完整性、一致性和变量类型检查。
-原始数据包含{original_shape[0]}条样本和{original_shape[1]}个变量。
-针对缺失数据，本文采用“{missing_method}”方法进行处理，
-共插补{imputed_cells}个缺失单元格，
-并因缺失值删除{deleted_target_missing_rows + deleted_missing_rows}条样本。
-针对异常数据，本文采用“{outlier_method}”方法进行识别，
-共检测到{outlier_row_count}条异常样本，
-并根据处理策略删除{deleted_outlier_rows}条异常样本。
-本文将“{target}”作为因变量，
-将{", ".join(predictors)}作为解释变量。
-""".strip()
-
-        if group_col != "无":
-            paper_text += (
-                f'考虑到同一“{group_col}”下可能存在多次观测，'
-                "本文将其作为重复观测的分组变量。"
+        if matrix_rank < X.shape[1]:
+            st.warning(
+                "设计矩阵可能存在完全多重共线性，部分参数可能无法稳定估计。"
             )
 
-        paper_text += (
-            f"在综合考虑因变量类型、数据取值范围和观测结构后，"
-            f'最终采用“{stored_model_type}”进行建模。'
-            f"清洗后最终保留{clean_data_for_model.shape[0]}条有效样本，"
-            "并据此开展后续统计分析和模型估计。"
+        target_type_for_model = variable_types.get(target, "分类")
+
+        # 统一变量类型名称，避免类型名称不一致导致模型推荐为“未识别”
+        type_aliases = {
+            "连续型": "连续",
+            "次数型": "次数",
+            "数值": "连续",
+            "数值型": "连续",
+            "类别": "分类",
+            "分类变量": "分类",
+        }
+        target_type_for_model = type_aliases.get(
+            target_type_for_model,
+            target_type_for_model,
         )
 
-        st.text_area(
-            "论文表述草稿",
-            paper_text,
-            height=300,
-            key="paper_text_area",
+        recommended_info = detect_model_type(
+            y,
+            target_type_for_model,
+            groups=groups,
         )
 
-except Exception as exc:
-    st.error(
-        f"模型数据构造或分析过程中发生错误：{exc}"
-    )
+        # 对未识别类型提供明确的兜底推荐
+        if recommended_info.get("model_type") == "未识别":
+            if target_type_for_model == "连续":
+                recommended_info = {
+                    "model_type": "线性回归",
+                    "reason": "目标变量被设置为连续型变量。",
+                }
+            elif target_type_for_model == "次数":
+                recommended_info = {
+                    "model_type": "泊松回归",
+                    "reason": "目标变量被设置为次数型变量。",
+                }
+            elif target_type_for_model == "分类":
+                unique_count = len(np.unique(y))
+                if unique_count <= 2:
+                    model_name = "二元逻辑回归"
+                else:
+                    model_name = "多项逻辑回归"
+                recommended_info = {
+                    "model_type": model_name,
+                    "reason": "目标变量被设置为分类变量。",
+                }
+
+        recommended_model = recommended_info[
+            "model_type"
+        ]
+
+        st.info(
+            f"程序推荐模型：**{recommended_model}**\n\n"
+            f"判断依据：{recommended_info['reason']}"
+        )
+
+        recommended_index = (
+            MODEL_OPTIONS.index(
+                recommended_model
+            )
+            if recommended_model in MODEL_OPTIONS
+            else 0
+        )
+
+        final_model_type = st.selectbox(
+            "请选择最终拟合模型",
+            MODEL_OPTIONS,
+            index=recommended_index,
+            key="final_model_selector",
+        )
+
+        # 重要修复：
+        # 统一使用 final_model_type，不再使用未定义的 model_type。
+        model_type = final_model_type
+
+        previous_model_type = st.session_state.get(
+            "selected_model_type"
+        )
+
+        if (
+            previous_model_type is not None
+            and previous_model_type != final_model_type
+        ):
+            clear_model_session_state()
+
+        st.session_state["selected_model_type"] = (
+            final_model_type
+        )
+
+        if (
+            final_model_type
+            in [
+                "线性混合效应模型",
+                "比例型混合效应模型",
+            ]
+            and group_col == "无"
+        ):
+            st.error(
+                "当前模型需要分组变量，请先选择重复观测分组变量。"
+            )
+            st.stop()
+
+        vif_table = calculate_vif(X)
+
+        st.write("多重共线性诊断")
+
+        if vif_table.empty:
+            st.info(
+                "当前没有足够的自变量计算 VIF。"
+            )
+        else:
+            st.dataframe(
+                vif_table,
+                use_container_width=True,
+            )
+
+            dataframe_download(
+                vif_table,
+                "VIF多重共线性诊断.csv",
+                key="download_vif",
+            )
+
+        fit_button = st.button(
+            "开始拟合最终模型",
+            type="primary",
+            key="fit_final_model",
+        )
+
+        if fit_button:
+            is_valid, validation_message = (
+                validate_model_selection(
+                    y=y,
+                    target_type=variable_types[target],
+                    model_type=final_model_type,
+                    groups=groups,
+                )
+            )
+
+            if not is_valid:
+                st.error(validation_message)
+                st.stop()
+
+            try:
+                new_fitted_result = fit_model(
+                    y,
+                    X,
+                    groups,
+                    final_model_type,
+                    robust_se=robust_se,
+                )
+
+                st.session_state[
+                    "fitted_result"
+                ] = new_fitted_result
+
+                st.session_state[
+                    "fitted_model"
+                ] = new_fitted_result["model"]
+
+                st.session_state[
+                    "final_model_type"
+                ] = final_model_type
+
+                st.session_state[
+                    "model_meta"
+                ] = model_meta
+
+                st.session_state[
+                    "X_for_assumption"
+                ] = X
+
+                st.session_state[
+                    "vif_table"
+                ] = vif_table
+
+                st.session_state[
+                    "target_mapping"
+                ] = model_meta.get(
+                    "target_mapping"
+                )
+
+                st.success(
+                    "模型拟合完成，结果已经保存。"
+                )
+
+            except Exception as exc:
+                st.error(
+                    f"模型拟合失败：{exc}"
+                )
+
+        # 重要修复：
+        # 每次页面重新运行时从 session_state 恢复模型结果。
+        fitted_result = st.session_state.get(
+            "fitted_result"
+        )
+
+        fitted_model = st.session_state.get(
+            "fitted_model"
+        )
+
+        stored_model_type = st.session_state.get(
+            "final_model_type",
+            final_model_type,
+        )
+
+        # --------------------------------------------------------
+        # 模型结果
+        # --------------------------------------------------------
+
+        if fitted_result is None:
+            st.info(
+                '请点击“开始拟合最终模型”后查看模型结果。'
+            )
+
+        else:
+            st.subheader("9. 模型结果")
+
+            mapping = st.session_state.get(
+                "target_mapping"
+            )
+
+            if mapping:
+                st.write("分类因变量编码映射")
+
+                mapping_table = pd.DataFrame(
+                    {
+                        "原始类别": list(
+                            mapping.keys()
+                        ),
+                        "模型编码": list(
+                            mapping.values()
+                        ),
+                    }
+                )
+
+                st.dataframe(
+                    mapping_table,
+                    use_container_width=True,
+                )
+
+            if model_is_converged(fitted_model):
+                st.success(
+                    "模型已收敛或未检测到明显收敛问题。"
+                )
+            else:
+                st.warning(
+                    "模型未收敛，当前系数、P值和预测结果不建议直接用于论文。"
+                )
+
+            metric_table = make_metric_table(
+                fitted_result
+            )
+
+            st.write("模型评价指标")
+            st.dataframe(
+                metric_table,
+                use_container_width=True,
+            )
+
+            dataframe_download(
+                metric_table,
+                "模型评价指标.csv",
+                key="download_model_metrics",
+            )
+
+            result_table = make_result_table(
+                fitted_model,
+                stored_model_type,
+            )
+
+            st.write("模型系数结果")
+            st.dataframe(
+                result_table,
+                use_container_width=True,
+            )
+
+            dataframe_download(
+                result_table,
+                "模型系数结果.csv",
+                key="download_model_coefficients",
+            )
+
+            prediction_table = create_prediction_table(
+                fitted_result
+            )
+
+            st.write(
+                "实际值、预测值与残差"
+            )
+
+            st.dataframe(
+                prediction_table.head(100),
+                use_container_width=True,
+            )
+
+            dataframe_download(
+                prediction_table,
+                "实际值预测值残差.csv",
+                key="download_prediction_table",
+            )
+
+            # ----------------------------------------------------
+            # 训练集 / 测试集评估
+            # ----------------------------------------------------
+
+            st.subheader(
+                "训练集/测试集评估"
+            )
+
+            if not use_test_set:
+                st.info(
+                    "当前已关闭训练集/测试集评估。"
+                    "上方模型评价指标为样本内指标。"
+                )
+
+            elif stored_model_type in [
+                "线性混合效应模型",
+                "比例型混合效应模型",
+            ]:
+                st.info(
+                    "混合效应模型暂未采用普通随机划分，"
+                    "建议按照分组变量进行分组交叉验证。"
+                )
+
+            else:
+                try:
+                    if len(y) < 10:
+                        st.warning(
+                            "样本量少于10，训练集/测试集划分结果可能不稳定。"
+                        )
+
+                    indices = np.arange(len(y))
+
+                    train_index, test_index = (
+                        train_test_split(
+                            indices,
+                            test_size=test_size,
+                            random_state=42,
+                        )
+                    )
+
+                    y_train = y.iloc[train_index]
+                    y_test = y.iloc[test_index]
+
+                    X_train = X.iloc[train_index]
+                    X_test = X.iloc[test_index]
+
+                    test_model_result = fit_model(
+                        y_train,
+                        X_train,
+                        None,
+                        stored_model_type,
+                        robust_se=robust_se,
+                    )
+
+                    test_model = test_model_result[
+                        "model"
+                    ]
+
+                    if stored_model_type == (
+                        "二项Logistic回归"
+                    ):
+                        test_probability = np.asarray(
+                            test_model.predict(X_test),
+                            dtype=float,
+                        )
+
+                        test_class = (
+                            test_probability >= 0.5
+                        ).astype(int)
+
+                        test_metrics = [
+                            "准确率",
+                            "平衡准确率",
+                            "精确率",
+                            "召回率",
+                            "F1值",
+                            "Log Loss",
+                        ]
+
+                        test_values = [
+                            accuracy_score(
+                                y_test.astype(int),
+                                test_class,
+                            ),
+                            balanced_accuracy_score(
+                                y_test.astype(int),
+                                test_class,
+                            ),
+                            precision_score(
+                                y_test.astype(int),
+                                test_class,
+                                zero_division=0,
+                            ),
+                            recall_score(
+                                y_test.astype(int),
+                                test_class,
+                                zero_division=0,
+                            ),
+                            f1_score(
+                                y_test.astype(int),
+                                test_class,
+                                zero_division=0,
+                            ),
+                            log_loss(
+                                y_test.astype(int),
+                                test_probability,
+                            ),
+                        ]
+
+                        if len(
+                            np.unique(
+                                y_test
+                            )
+                        ) == 2:
+                            test_metrics.append(
+                                "ROC-AUC"
+                            )
+                            test_values.append(
+                                roc_auc_score(
+                                    y_test,
+                                    test_probability,
+                                )
+                            )
+
+                    elif stored_model_type == (
+                        "多项Logistic回归"
+                    ):
+                        probability = np.asarray(
+                            test_model.predict(X_test)
+                        )
+
+                        test_class = (
+                            probability.argmax(axis=1)
+                        )
+
+                        test_metrics = [
+                            "准确率",
+                            "平衡准确率",
+                            "宏平均F1",
+                        ]
+
+                        test_values = [
+                            accuracy_score(
+                                y_test.astype(int),
+                                test_class,
+                            ),
+                            balanced_accuracy_score(
+                                y_test.astype(int),
+                                test_class,
+                            ),
+                            f1_score(
+                                y_test.astype(int),
+                                test_class,
+                                average="macro",
+                                zero_division=0,
+                            ),
+                        ]
+
+                    else:
+                        test_prediction = np.asarray(
+                            test_model.predict(X_test),
+                            dtype=float,
+                        )
+
+                        test_metrics = [
+                            "RMSE",
+                            "MAE",
+                            "R²",
+                        ]
+
+                        test_values = [
+                            np.sqrt(
+                                mean_squared_error(
+                                    y_test,
+                                    test_prediction,
+                                )
+                            ),
+                            mean_absolute_error(
+                                y_test,
+                                test_prediction,
+                            ),
+                            r2_score(
+                                y_test,
+                                test_prediction,
+                            ),
+                        ]
+
+                    test_metric_table = pd.DataFrame(
+                        {
+                            "测试集指标": test_metrics,
+                            "数值": test_values,
+                        }
+                    )
+
+                    st.dataframe(
+                        test_metric_table,
+                        use_container_width=True,
+                    )
+
+                    dataframe_download(
+                        test_metric_table,
+                        "测试集评价指标.csv",
+                        key="download_test_metrics",
+                    )
+
+                except Exception as exc:
+                    st.warning(
+                        f"测试集评估失败：{exc}"
+                    )
+
+            # ----------------------------------------------------
+            # 线性模型诊断
+            # ----------------------------------------------------
+
+            if stored_model_type in [
+                "多元线性回归",
+                "Logit变换线性回归",
+            ]:
+                st.subheader("线性模型诊断")
+
+                diagnostic_table = (
+                    make_diagnostic_table(
+                        fitted_model
+                    )
+                )
+
+                st.dataframe(
+                    diagnostic_table,
+                    use_container_width=True,
+                )
+
+                dataframe_download(
+                    diagnostic_table,
+                    "线性模型诊断.csv",
+                    key="download_diagnostic_table",
+                )
+
+                residuals = np.asarray(
+                    fitted_model.resid,
+                    dtype=float,
+                )
+
+                fitted_values = np.asarray(
+                    fitted_model.fittedvalues,
+                    dtype=float,
+                )
+
+                diag_col1, diag_col2 = st.columns(2)
+
+                with diag_col1:
+                    fig_residual, ax_residual = (
+                        plt.subplots(
+                            figsize=(7, 5)
+                        )
+                    )
+
+                    sns.scatterplot(
+                        x=fitted_values,
+                        y=residuals,
+                        ax=ax_residual,
+                    )
+
+                    ax_residual.axhline(
+                        0,
+                        color="red",
+                        linestyle="--",
+                    )
+
+                    ax_residual.set_xlabel(
+                        "拟合值"
+                    )
+                    ax_residual.set_ylabel(
+                        "残差"
+                    )
+                    ax_residual.set_title(
+                        "残差-拟合值图"
+                    )
+
+                    st.pyplot(fig_residual)
+                    plt.close(fig_residual)
+
+                with diag_col2:
+                    fig_qq, ax_qq = plt.subplots(
+                        figsize=(7, 5)
+                    )
+
+                    probplot(
+                        residuals,
+                        dist="norm",
+                        plot=ax_qq,
+                    )
+
+                    ax_qq.set_title(
+                        "残差正态QQ图"
+                    )
+
+                    st.pyplot(fig_qq)
+                    plt.close(fig_qq)
+
+                try:
+                    influence = OLSInfluence(
+                        fitted_model
+                    )
+
+                    cooks_distance = (
+                        influence.cooks_distance[0]
+                    )
+
+                    cooks_table = pd.DataFrame(
+                        {
+                            "样本序号": np.arange(
+                                len(cooks_distance)
+                            ),
+                            "Cook距离": cooks_distance,
+                        }
+                    ).sort_values(
+                        "Cook距离",
+                        ascending=False,
+                    )
+
+                    st.write(
+                        "Cook距离较大的观测"
+                    )
+
+                    st.dataframe(
+                        cooks_table.head(20),
+                        use_container_width=True,
+                    )
+
+                    dataframe_download(
+                        cooks_table,
+                        "Cook距离.csv",
+                        key="download_cooks_distance",
+                    )
+
+                except Exception as exc:
+                    st.info(
+                        f"Cook距离计算失败：{exc}"
+                    )
+
+            # ----------------------------------------------------
+            # 分类模型诊断
+            # ----------------------------------------------------
+
+            if stored_model_type == (
+                "二项Logistic回归"
+            ):
+                st.subheader(
+                    "二分类模型诊断"
+                )
+
+                cm = confusion_matrix(
+                    prediction_table[
+                        "实际值"
+                    ].astype(int),
+                    prediction_table[
+                        "预测类别"
+                    ].astype(int),
+                )
+
+                cm_index = [
+                    f"真实{i}"
+                    for i in range(cm.shape[0])
+                ]
+
+                cm_columns = [
+                    f"预测{i}"
+                    for i in range(cm.shape[1])
+                ]
+
+                cm_table = pd.DataFrame(
+                    cm,
+                    index=cm_index,
+                    columns=cm_columns,
+                )
+
+                st.write("混淆矩阵")
+                st.dataframe(
+                    cm_table,
+                    use_container_width=True,
+                )
+
+                dataframe_download(
+                    cm_table.reset_index(),
+                    "二分类混淆矩阵.csv",
+                    key="download_confusion_matrix",
+                )
+
+            # ----------------------------------------------------
+            # 模型假设
+            # ----------------------------------------------------
+
+            st.subheader("10. 模型假设")
+
+            assumptions = generate_assumptions(
+                target,
+                predictors,
+                variable_types,
+                stored_model_type,
+                vif_table=st.session_state.get(
+                    "vif_table",
+                    vif_table,
+                ),
+                group_col=group_col,
+            )
+
+            assumptions_text = "\n".join(
+                [
+                    f"{index + 1}. {text}"
+                    for index, text in enumerate(
+                        assumptions
+                    )
+                ]
+            )
+
+            st.text_area(
+                "可直接复制到论文的模型假设",
+                assumptions_text,
+                height=350,
+                key="assumptions_text_area",
+            )
+
+            # ----------------------------------------------------
+            # 论文表述草稿
+            # ----------------------------------------------------
+
+            st.subheader("11. 论文表述草稿")
+
+            paper_text = f"""
+    本文首先对原始数据进行完整性、一致性和变量类型检查。
+    原始数据包含{original_shape[0]}条样本和{original_shape[1]}个变量。
+    针对缺失数据，本文采用“{missing_method}”方法进行处理，
+    共插补{imputed_cells}个缺失单元格，
+    并因缺失值删除{deleted_target_missing_rows + deleted_missing_rows}条样本。
+    针对异常数据，本文采用“{outlier_method}”方法进行识别，
+    共检测到{outlier_row_count}条异常样本，
+    并根据处理策略删除{deleted_outlier_rows}条异常样本。
+    本文将“{target}”作为因变量，
+    将{", ".join(predictors)}作为解释变量。
+    """.strip()
+
+            if group_col != "无":
+                paper_text += (
+                    f'考虑到同一“{group_col}”下可能存在多次观测，'
+                    "本文将其作为重复观测的分组变量。"
+                )
+
+            paper_text += (
+                f"在综合考虑因变量类型、数据取值范围和观测结构后，"
+                f'最终采用“{stored_model_type}”进行建模。'
+                f"清洗后最终保留{clean_data_for_model.shape[0]}条有效样本，"
+                "并据此开展后续统计分析和模型估计。"
+            )
+
+            st.text_area(
+                "论文表述草稿",
+                paper_text,
+                height=300,
+                key="paper_text_area",
+            )
+
+    except Exception as exc:
+        st.error(
+            f"模型数据构造或分析过程中发生错误：{exc}"
+        )
 
 
-# ============================================================
-# 二十一、使用注意事项
-# ============================================================
+    # ============================================================
+    # 二十一、使用注意事项
+    # ============================================================
 
-with st.expander(
-    "使用和解释模型时的注意事项"
-):
-    st.markdown(
-        """
-### 1. 自动推荐不是最终结论
+    with st.expander(
+        "使用和解释模型时的注意事项"
+    ):
+        st.markdown(
+            """
+    ### 1. 自动推荐不是最终结论
 
-程序根据变量类型和数据结构进行初步推荐，
-最终模型应结合题目目标、变量含义和模型诊断结果确定。
+    程序根据变量类型和数据结构进行初步推荐，
+    最终模型应结合题目目标、变量含义和模型诊断结果确定。
 
-### 2. 相关性不等于因果关系
+    ### 2. 相关性不等于因果关系
 
-Pearson/Spearman 相关系数和回归系数只能反映统计关联，
-不能单独证明因果关系。
+    Pearson/Spearman 相关系数和回归系数只能反映统计关联，
+    不能单独证明因果关系。
 
-### 3. 异常值不一定是错误数据
+    ### 3. 异常值不一定是错误数据
 
-异常值可能是真实存在的极端情况。
-正式论文中删除异常数据时，应说明识别方法和删除依据。
+    异常值可能是真实存在的极端情况。
+    正式论文中删除异常数据时，应说明识别方法和删除依据。
 
-### 4. R²不能单独判断模型好坏
+    ### 4. R²不能单独判断模型好坏
 
-应结合调整R²、AIC/BIC、残差图、测试集误差、
-显著性检验和实际解释意义共同评价。
+    应结合调整R²、AIC/BIC、残差图、测试集误差、
+    显著性检验和实际解释意义共同评价。
 
-### 5. 分类模型不要只看准确率
+    ### 5. 分类模型不要只看准确率
 
-如果类别分布不平衡，还应重点查看平衡准确率、
-精确率、召回率、F1值和ROC-AUC。
+    如果类别分布不平衡，还应重点查看平衡准确率、
+    精确率、召回率、F1值和ROC-AUC。
 
-### 6. 混合效应模型需要真实的重复观测结构
+    ### 6. 混合效应模型需要真实的重复观测结构
 
-不能仅因为某列取值重复就直接使用混合效应模型。
-分组变量应确实代表同一对象、地区、企业或其他层级单位的重复观测。
+    不能仅因为某列取值重复就直接使用混合效应模型。
+    分组变量应确实代表同一对象、地区、企业或其他层级单位的重复观测。
 
-### 7. 测试集划分需要结合数据结构
+    ### 7. 测试集划分需要结合数据结构
 
-如果数据具有时间顺序，建议使用时间序列划分；
-如果数据具有分组结构，建议按照组进行训练集和测试集划分，
-避免同一对象同时出现在训练集和测试集中。
-"""
-    )
+    如果数据具有时间顺序，建议使用时间序列划分；
+    如果数据具有分组结构，建议按照组进行训练集和测试集划分，
+    避免同一对象同时出现在训练集和测试集中。
+    """
+        )
+
+
+else:  # 优化求解模块
+    import numpy as np
+    from scipy.optimize import linprog, milp, minimize, LinearConstraint, Bounds
+
+    st.header("📊 优化问题求解器")
+
+    if "opt_uploaded_file" not in st.session_state:
+        st.session_state.opt_uploaded_file = None
+    opt_upload = st.sidebar.file_uploader("上传数据表（优化用）", type=["csv", "xlsx"], key="opt_data_upload")
+    if opt_upload is not None:
+        st.session_state.opt_uploaded_file = opt_upload
+
+    if st.session_state.opt_uploaded_file is None:
+        st.info("请先在侧边栏上传数据表，然后使用优化求解功能。")
+        st.stop()
+
+    try:
+        uploaded_file = st.session_state.opt_uploaded_file
+        uploaded_file.seek(0)
+        if uploaded_file.name.endswith(".csv"):
+            opt_df = pd.read_csv(uploaded_file)
+        else:
+            opt_df = pd.read_excel(uploaded_file)
+    except Exception as e:
+        st.error(f"读取文件失败：{e}")
+        st.stop()
+
+    opt_df.columns = make_unique_columns(opt_df.columns)
+    st.success(f"已加载数据：{opt_df.shape[0]} 行, {opt_df.shape[1]} 列")
+
+    # 优化类型
+    opt_type = st.selectbox("选择优化类型", ["线性规划 (LP)", "整数线性规划 (ILP)", "0-1 规划"])
+
+    # 决策变量
+    # 自动找出所有“可以转为数字”的列（只要超过一半值能转成数字就算）
+    col_list = []
+    for col in opt_df.columns:
+        try:
+            numeric_part = pd.to_numeric(opt_df[col], errors='coerce')
+            if numeric_part.notna().mean() > 0.5:  # 超过50%的值能转成数字
+                col_list.append(col)
+        except Exception:
+            pass
+
+    if not col_list:
+        st.error("数据表中没有可转换为数值的列，请检查数据格式。")
+        st.stop()
+
+    var_cols = st.multiselect("选择决策变量所在的列（可多选）", col_list)
+    if not var_cols:
+        st.warning("请至少选择一个决策变量列。")
+        st.stop()
+    n_vars = len(var_cols)
+
+    # 目标函数系数：使用数据列的第一行作为默认系数，也可手动修改
+    st.subheader("目标函数系数")
+    obj_coeffs = []
+    for c in var_cols:
+        # 安全读取第一个有效数值
+        num_series = pd.to_numeric(opt_df[c], errors='coerce').dropna()
+        default_val = float(num_series.iloc[0]) if len(num_series) > 0 else 0.0
+        coeff = st.number_input(f"系数 {c}", value=default_val, format="%.4f")
+        obj_coeffs.append(coeff)
+    maximize = st.checkbox("最大化目标")
+
+    # 约束条件
+    st.subheader("约束条件")
+    if "cons_list" not in st.session_state:
+        st.session_state.cons_list = []
+    with st.form("add_constraint"):
+        coeff_str = st.text_input("系数（逗号分隔）", "1,1")
+        sign = st.selectbox("关系", ["<=", "=", ">="])
+        rhs = st.number_input("右侧常数", value=1.0)
+        if st.form_submit_button("添加约束"):
+            try:
+                coeffs = [float(x) for x in coeff_str.split(",")]
+                if len(coeffs) != n_vars:
+                    st.error(f"系数个数应为 {n_vars}")
+                else:
+                    st.session_state.cons_list.append((coeffs, sign, rhs))
+            except:
+                st.error("系数格式错误")
+    # 显示已添加约束
+    for i, (coeffs, sign, rhs) in enumerate(st.session_state.cons_list):
+        expr = " + ".join([f"{c}*{var_cols[j]}" for j, c in enumerate(coeffs)])
+        st.write(f"约束 {i+1}: {expr} {sign} {rhs}")
+    if st.button("清空所有约束"):
+        st.session_state.cons_list = []
+
+    # 变量边界
+    st.subheader("变量边界")
+    use_bounds = st.checkbox("自定义边界（默认 >=0）")
+    bounds = [(0, None) for _ in range(n_vars)]
+    if use_bounds:
+        for i, col in enumerate(var_cols):
+            c1, c2 = st.columns(2)
+            lo = c1.number_input(f"{col} 下界", value=0.0)
+            hi = c2.number_input(f"{col} 上界", value=100.0)
+            bounds[i] = (lo, hi)
+
+    # 整数约束
+    integrality = None
+    if "整数" in opt_type:
+        int_vars = st.multiselect("整数变量", var_cols)
+        integrality = [1 if col in int_vars else 0 for col in var_cols]
+    if opt_type == "0-1 规划":
+        integrality = [2] * n_vars
+
+    # 求解
+    if st.button("🚀 求解", type="primary"):
+        A_ub, b_ub, A_eq, b_eq = [], [], [], []
+        for coeffs, sign, rhs in st.session_state.cons_list:
+            if sign == "<=":
+                A_ub.append(coeffs)
+                b_ub.append(rhs)
+            elif sign == ">=":
+                A_ub.append([-c for c in coeffs])
+                b_ub.append(-rhs)
+            else:
+                A_eq.append(coeffs)
+                b_eq.append(rhs)
+
+        c = np.array(obj_coeffs)
+        if maximize:
+            c = -c
+
+        # 转换为 numpy 数组
+        A_ub = np.array(A_ub) if A_ub else None
+        b_ub = np.array(b_ub) if b_ub else None
+        A_eq = np.array(A_eq) if A_eq else None
+        b_eq = np.array(b_eq) if b_eq else None
+
+        try:
+            if integrality and any(i > 0 for i in integrality):
+                from scipy.optimize import milp, LinearConstraint, Bounds
+                cons = []
+                if A_ub is not None:
+                    cons.append(LinearConstraint(A_ub, -np.inf, b_ub))
+                if A_eq is not None:
+                    cons.append(LinearConstraint(A_eq, b_eq, b_eq))
+                lb = [b[0] if b[0] is not None else -np.inf for b in bounds]
+                ub = [b[1] if b[1] is not None else np.inf for b in bounds]
+                res = milp(c=c, constraints=cons, bounds=Bounds(lb, ub), integrality=integrality)
+            else:
+                res = linprog(c, A_ub=A_ub, b_ub=b_ub, A_eq=A_eq, b_eq=b_eq, bounds=bounds, method='highs')
+
+            if res.success:
+                opt_x = res.x
+                opt_val = -res.fun if maximize else res.fun
+                st.success("✅ 求解成功！")
+                st.write("**最优解：**")
+                st.json({var_cols[i]: float(opt_x[i]) for i in range(n_vars)})
+                st.write(f"**最优值：** {opt_val:.6f}")
+
+                # 简单敏感性分析
+                st.subheader("影子价格近似")
+                for idx, (coeffs, sign, rhs) in enumerate(st.session_state.cons_list):
+                    delta = 0.01 * max(abs(rhs), 1.0)
+                    # 重新求解扰动后问题
+                    t_A_ub, t_b_ub, t_A_eq, t_b_eq = [], [], [], []
+                    for j, (coeffs_j, sign_j, rhs_j) in enumerate(st.session_state.cons_list):
+                        if j == idx:
+                            rhs_j += delta
+                        if sign_j == "<=":
+                            t_A_ub.append(coeffs_j); t_b_ub.append(rhs_j)
+                        elif sign_j == ">=":
+                            t_A_ub.append([-c for c in coeffs_j]); t_b_ub.append(-rhs_j)
+                        else:
+                            t_A_eq.append(coeffs_j); t_b_eq.append(rhs_j)
+                    try:
+                        t_A_ub = np.array(t_A_ub) if t_A_ub else None
+                        t_b_ub = np.array(t_b_ub) if t_b_ub else None
+                        t_A_eq = np.array(t_A_eq) if t_A_eq else None
+                        t_b_eq = np.array(t_b_eq) if t_b_eq else None
+                        res2 = linprog(c, A_ub=t_A_ub, b_ub=t_b_ub, A_eq=t_A_eq, b_eq=t_b_eq, bounds=bounds, method='highs')
+                        if res2.success:
+                            pval = -res2.fun if maximize else res2.fun
+                            shadow = (pval - opt_val) / delta
+                            st.write(f"约束 {idx+1}: 影子价格 ≈ {shadow:.6f}")
+                    except:
+                        pass
+            else:
+                st.error(f"求解失败：{res.message}")
+        except Exception as e:
+            st.error(f"求解错误：{e}")
+
+    # 以下优化代码结束
