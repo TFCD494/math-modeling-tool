@@ -1003,24 +1003,6 @@ def correlation_table(
     return pd.DataFrame(rows)
 
 
-def create_sample_symbol_table(df):
-    """创建样本符号表。"""
-    if df.shape[1] == 0:
-        return pd.DataFrame()
-
-    first_col = df.columns[0]
-
-    return pd.DataFrame(
-        {
-            "样本原始名称": df[first_col].astype(str),
-            "样本符号": [
-                f"A{i + 1}"
-                for i in range(len(df))
-            ],
-        }
-    )
-
-
 def create_variable_symbol_table(
     target,
     predictors,
@@ -1032,13 +1014,14 @@ def create_variable_symbol_table(
     for index, col in enumerate(
         [target] + predictors
     ):
+        if col == target:
+            default_symbol = "y"
+        else:
+            default_symbol = f"x_{index}"
+
         rows.append(
             {
-                "变量符号": (
-                    "y"
-                    if col == target
-                    else f"x{index}"
-                ),
+                "变量符号": default_symbol,
                 "原始列名": col,
                 "变量角色": (
                     "因变量"
@@ -1055,7 +1038,6 @@ def create_variable_symbol_table(
         )
 
     return pd.DataFrame(rows)
-
 
 # ============================================================
 # 八、模型数据构造
@@ -2833,8 +2815,19 @@ symbol_mode = st.radio(
 )
 
 if symbol_mode == "样本符号表":
-    sample_symbol_table = (
-        create_sample_symbol_table(raw_df)
+    target = "是否购买"  # 改成你的真实目标列名
+
+    predictors = [
+        col for col in raw_df.columns
+        if col != target
+    ]
+
+    variable_types = raw_df.dtypes.astype(str).to_dict()
+
+    sample_symbol_table = create_variable_symbol_table(
+        target=target,
+        predictors=predictors,
+        variable_types=variable_types,
     )
 
     st.dataframe(
@@ -2857,19 +2850,40 @@ else:
         )
     )
 
+    st.info(
+        r"可以直接编辑“变量符号”“单位”和“变量含义”。"
+        r"例如：\mathrm{Year}_i"
+    )
+
     edited_symbol_table = st.data_editor(
         variable_symbol_table,
         use_container_width=True,
         num_rows="fixed",
+        disabled=[
+            "原始列名",
+            "变量角色",
+            "变量类型",
+        ],
         key="variable_symbol_editor",
     )
+
+    st.write("LaTeX 变量符号预览")
+
+    for _, row in edited_symbol_table.iterrows():
+        symbol = str(row["变量符号"]).strip()
+        original_name = str(row["原始列名"]).strip()
+
+        if symbol:
+            st.markdown(
+                f"原始变量：`{original_name}`"
+            )
+            st.latex(symbol)
 
     dataframe_download(
         edited_symbol_table,
         "变量符号表.csv",
         key="download_variable_symbol_table",
     )
-
 
 # ============================================================
 # 十七、数据清洗
