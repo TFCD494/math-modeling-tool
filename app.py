@@ -54,6 +54,7 @@ st.set_page_config(
 import statsmodels.api as sm
 
 from scipy.stats import pearsonr, spearmanr, shapiro, probplot
+from scipy.optimize import linprog
 from sklearn.model_selection import (
     train_test_split,
     GroupShuffleSplit,
@@ -306,24 +307,11 @@ def setup_chinese_font():
     except Exception:
         pass
 
-    plt.rcParams["font.sans-serif"] = [_font_name]
+    plt.rcParams["font.sans-serif"] = ["DejaVu Sans"]
 
 
 setup_chinese_font()
-def load_image_as_base64(image_path):
-    """读取本地图片并转换为 Base64，供网页嵌入。"""
-    try:
-        with open(image_path, "rb") as image_file:
-            encoded = base64.b64encode(
-                image_file.read()
-            ).decode("utf-8")
 
-        return encoded
-
-    except Exception:
-        return ""
-fursona_path = str(Path(__file__).resolve().parent / "assets" / "fursona_shu.png")
-fursona_base64 = load_image_as_base64(fursona_path)
 
 # ============================================================
 # 三、Session State 管理
@@ -1075,7 +1063,15 @@ def fill_missing_values(
                     median_value
                 )
 
-            treatment = "线性插值+中位数"
+            if var_type == "次数":
+                # 次数变量插补后取整，避免出现“1.5次”这类含义不明的值
+                result[col] = result[col].round()
+
+            treatment = (
+                "线性插值+中位数（取整）"
+                if var_type == "次数"
+                else "线性插值+中位数"
+            )
 
         elif var_type == "时间":
             result[col] = result[col].ffill().bfill()
@@ -2265,7 +2261,7 @@ def make_metric_table(fitted_result):
                     "Log Loss",
                     log_loss(
                         y.astype(int),
-                        probability,
+                        np.clip(probability, 1e-6, 1 - 1e-6),
                     ),
                 ],
             ]
@@ -2585,7 +2581,7 @@ with st.sidebar:
     # ===== 背景音乐 BGM =====
     st.sidebar.subheader("🎵 背景音乐")
     bgm_path = Path(__file__).resolve().parent / "assets" / "bgm.mp3"
-    bgm_enabled = st.sidebar.checkbox("开启背景音乐", value=True)
+    bgm_enabled = st.sidebar.checkbox("开启背景音乐", value=False)
 
     if bgm_enabled:
         try:
@@ -2707,6 +2703,12 @@ with st.sidebar:
                 result["main_type"]
             )
 
+            # 强制“赛题类型”输入框刷新为新检测到的类型
+            st.session_state.pop(
+                "problem_type_input",
+                None,
+            )
+
         detect_result = st.session_state.get(
             "detect_result",
             {},
@@ -2809,6 +2811,7 @@ with st.sidebar:
                 "",
             ),
             placeholder="例如：预测类、评价类、优化类",
+            key="problem_type_input",
         )
 
         uploaded_file = st.file_uploader(
@@ -3060,6 +3063,10 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
             for col in predictors
             if col != group_col
         ]
+
+        st.info(
+            f'已将 "{group_col}" 从自变量中移除（它被用作分组变量）。'
+        )
 
     if not predictors:
         st.error(
@@ -3501,7 +3508,6 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
         "可直接用于论文的数据清洗表述",
         cleaning_text,
         height=220,
-        key="cleaning_text_area",
     )
 
 
@@ -4323,7 +4329,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                                 ),
                                 log_loss(
                                     y_test.astype(int),
-                                    test_probability,
+                                    np.clip(test_probability, 1e-6, 1 - 1e-6),
                                 ),
                             ]
 
@@ -4654,7 +4660,6 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                 "可直接复制到论文的模型假设",
                 assumptions_text,
                 height=350,
-                key="assumptions_text_area",
             )
 
             # ----------------------------------------------------
@@ -4693,7 +4698,6 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                 "论文表述草稿",
                 paper_text,
                 height=300,
-                key="paper_text_area",
             )
 
     except Exception as exc:
@@ -4853,7 +4857,7 @@ else:  # 优化求解模块
     try:
         uploaded_file = st.session_state.opt_uploaded_file
         uploaded_file.seek(0)
-        if uploaded_file.name.endswith(".csv"):
+        if uploaded_file.name.lower().endswith(".csv"):
             try:
                 opt_df = pd.read_csv(uploaded_file, encoding='utf-8')
             except UnicodeDecodeError:
