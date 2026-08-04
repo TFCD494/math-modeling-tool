@@ -6545,7 +6545,16 @@ else:  # 优化求解模块
     st.success(f"已加载数据：{opt_df.shape[0]} 行, {opt_df.shape[1]} 列")
 
     # 优化类型
-    opt_type = st.selectbox("选择优化类型", ["线性规划 (LP)", "整数线性规划 (ILP)", "0-1 规划"])
+    opt_type = st.selectbox(
+        "选择优化类型",
+        [
+            "线性规划 (LP)",
+            "整数线性规划 (ILP)",
+            "0-1 规划",
+            "非线性规划 (NLP)",
+            "遗传算法 (无约束/有界)",
+        ],
+    )
 
     # 决策变量
     # 自动找出所有“可以转为数字”的列（只要超过一半值能转成数字就算）
@@ -6667,6 +6676,34 @@ else:  # 优化求解模块
         integrality = [1] * n_vars
         bounds = [(0, 1) for _ in range(n_vars)]
 
+    # ---------- 非线性规划 / 遗传算法：目标函数输入 ----------
+    nlp_use_cons = False
+
+    if opt_type in ["非线性规划 (NLP)", "遗传算法 (无约束/有界)"]:
+        st.subheader("非线性目标函数")
+        st.markdown(
+            "以 `x[0]`、`x[1]`… 表示决策变量。"
+            "示例：`2*x[0]**2 + 3*x[1]**2 - 4*x[0]*x[1]`"
+        )
+
+        nonlinear_obj_str = st.text_input(
+            "目标函数表达式",
+            value="x[0]**2 + x[1]**2",
+            key="nlp_obj_expr",
+        )
+
+        if opt_type == "非线性规划 (NLP)":
+            nlp_use_cons = st.checkbox(
+                "启用上方线性约束",
+                value=True,
+                key="nlp_use_cons_check",
+            )
+
+            st.caption(
+                "提示：非线性规划使用SLSQP算法。若带约束求解失败，"
+                "可取消勾选约束，或改用遗传算法搜索。"
+            )
+
     # 求解
     # 检查约束是否与当前变量列匹配
     for cons in st.session_state.cons_list:
@@ -6674,7 +6711,188 @@ else:  # 优化求解模块
             st.error("您更改了决策变量列，请清空所有约束后重新添加！")
             st.stop()
     if st.button("🚀 求解", type="primary"):
-        A_ub, b_ub, A_eq, b_eq = [], [], [], []
+        if opt_type in ["非线性规划 (NLP)", "遗传算法 (无约束/有界)"]:
+            # ---------------- 非线性求解 ----------------
+            try:
+                from scipy.optimize import minimize, differential_evolution
+
+                def _make_nlp_con(expr_str):
+                    """把约束表达式字符串编译为函数，支持 abs()。"""
+                    return eval(
+                        "lambda x: " + expr_str,
+                        {"np": np, "abs": np.abs},
+                    )
+
+                def _make_nlp_obj(expr_str):
+                    """把目标函数表达式字符串编译为函数。"""
+                    return eval(
+                        "lambda x: " + expr_str,
+                        {"np": np, "abs": np.abs},
+                    )
+
+                nonlinear_obj = _make_nlp_obj(nonlinear_obj_str)
+                nonlinear_cons = []
+
+                if nlp_use_cons:
+                    for cons in st.session_state.cons_list:
+                        coeffs = cons["coeffs"]
+                        sign = cons["sign"]
+                        rhs = cons["rhs"]
+                        n_c = len(coeffs)
+                        defaults = " + ".join(
+                            f"{coeffs[j]}*x[{j}]" for j in range(n_c)
+                        )
+
+                        # 注意：SLSQP 的 ineq 约束要求 fun(x) >= 0。
+                        # <= 约束：rhs - expr >= 0
+                        # >= 约束：expr - rhs >= 0
+                        # = 约束：用 -(abs(expr-rhs)) >= 0 近似，即 abs(expr-rhs) <= 0
+                        if sign == "<=":
+                            expr_part = f"{rhs} - ( {defaults} )"
+                        elif sign == ">=":
+                            expr_part = f"{defaults} - {rhs}"
+                        else:
+                            expr_part = f"-abs( {defaults} - {rhs} )"
+
+                        nonlinear_cons.append(
+                            {"type": "ineq", "fun": _make_nlp_con(expr_part)}
+                        )
+
+                opt_x0 = np.zeros(n_vars)
+
+                for i in range(n_vars):
+                    lo, hi = bounds[i]
+
+                    if hi is not None and lo is not None:
+                        opt_x0[i] = (lo + hi) / 2.0
+                    elif lo is not None:
+                        opt_x0[i] = lo + 1.0
+                    else:
+                        opt_x0[i] = 0.0
+
+                sign_factor = -1.0 if maximize else 1.0
+
+                if opt_type == "非线性规划 (NLP)":
+                    result_nlp = minimize(
+                        lambda x: sign_factor * nonlinear_obj(x),
+                        opt_x0,
+                        method="SLSQP",
+                        bounds=bounds,
+                        constraints=(
+                            nonlinear_cons if nlp_use_cons else None
+                        ),
+                        options={"maxiter": 500, "ftol": 1e-9},
+                    )
+
+                    opt_success = result_nlp.success
+                    opt_x = result_nlp.x
+                    opt_val = sign_factor * result_nlp.fun
+                    message_text = result_nlp.message
+                else:
+                    de_bounds = [
+                        (
+                            b[0],
+                            b[1] if b[1] is not None else b[0] + 100.0,
+                        )
+                        for b in bounds
+                    ]
+
+                    if nonlinear_cons:
+                        # 注意：differential_evolution 的 constraints 参数
+                        # 只接受 NonlinearConstraint 等对象，不支持裸函数。
+                        # GA 的 NonlinearConstraint 语义是 fun(x) <= 0，
+                        # 而 nonlinear_cons 是给 SLSQP 用的（fun(x) >= 0），
+                        # 因此这里必须取负号转换回 GA 语义。
+                        from scipy.optimize import NonlinearConstraint
+
+                        nlc_list = [
+                            NonlinearConstraint(
+                                lambda x, f=c["fun"]: -f(x),
+                                -np.inf,
+                                0,
+                            )
+                            for c in nonlinear_cons
+                        ]
+
+                        result_ga = differential_evolution(
+                            lambda x: sign_factor * nonlinear_obj(x),
+                            de_bounds,
+                            constraints=nlc_list,
+                            seed=42,
+                            maxiter=1000,
+                            tol=1e-9,
+                            polish=True,
+                        )
+                    else:
+                        result_ga = differential_evolution(
+                            lambda x: sign_factor * nonlinear_obj(x),
+                            de_bounds,
+                            seed=42,
+                            maxiter=1000,
+                            tol=1e-9,
+                            polish=True,
+                        )
+
+                    opt_success = result_ga.success
+                    opt_x = result_ga.x
+                    opt_val = sign_factor * result_ga.fun
+                    message_text = result_ga.message
+
+                if opt_success:
+                    st.success("✅ 求解成功！")
+                    st.write("**最优解：**")
+                    st.json(
+                        {
+                            var_cols[i]: float(opt_x[i])
+                            for i in range(n_vars)
+                        }
+                    )
+                    st.write(f"**最优值：** {opt_val:.6f}")
+
+                    opt_solution_df = pd.DataFrame(
+                        {
+                            "变量": var_cols,
+                            "最优解": [float(v) for v in opt_x],
+                        }
+                    )
+                    opt_solution_df.loc[len(opt_solution_df)] = [
+                        "最优值",
+                        float(opt_val),
+                    ]
+
+                    dataframe_download(
+                        opt_solution_df,
+                        "优化结果.csv",
+                        key="download_nlp_opt_result",
+                    )
+
+                    opt_method_name = (
+                        "遗传算法"
+                        if opt_type.startswith("遗传")
+                        else "非线性规划(SLSQP)"
+                    )
+
+                    st.text_area(
+                        "论文表述",
+                        (
+                            f"采用{opt_method_name}对上述优化问题进行求解，"
+                            f"目标函数的最优值为 {opt_val:.6f}，"
+                            f"对应的最优决策变量取值为："
+                            + "，".join(
+                                f"{var_cols[i]} = {float(opt_x[i]):.6f}"
+                                for i in range(n_vars)
+                            )
+                            + "。"
+                        ),
+                        height=120,
+                        key="nlp_text_area",
+                    )
+                else:
+                    st.error(f"求解失败：{message_text}")
+            except Exception as e:
+                st.error(f"求解错误：{e}")
+        else:
+            A_ub, b_ub, A_eq, b_eq = [], [], [], []
         for cons in st.session_state.cons_list:
             coeffs = cons["coeffs"]
             sign = cons["sign"]
@@ -6716,6 +6934,40 @@ else:  # 优化求解模块
                 st.write("**最优解：**")
                 st.json({var_cols[i]: float(opt_x[i]) for i in range(n_vars)})
                 st.write(f"**最优值：** {opt_val:.6f}")
+
+                opt_solution_df = pd.DataFrame(
+                    {
+                        "变量": var_cols,
+                        "最优解": [float(v) for v in opt_x],
+                    }
+                )
+                opt_solution_df.loc[len(opt_solution_df)] = [
+                    "最优值",
+                    float(opt_val),
+                ]
+
+                dataframe_download(
+                    opt_solution_df,
+                    "优化结果.csv",
+                    key="download_linear_opt_result",
+                )
+
+                st.text_area(
+                    "论文表述",
+                    (
+                        f"采用{opt_type}对上述问题进行求解，"
+                        f"目标函数的最优值为 {opt_val:.6f}，"
+                        f"对应的最优决策变量取值为："
+                        + "，".join(
+                            f"{var_cols[i]} = {float(opt_x[i]):.6f}"
+                            for i in range(n_vars)
+                        )
+                        + "。"
+                    ),
+                    height=120,
+                    key="linear_text_area",
+                )
+
                 if opt_type == "线性规划 (LP)":
                 
                     # 简单敏感性分析f
