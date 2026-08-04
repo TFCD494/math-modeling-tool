@@ -3512,6 +3512,231 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
 
 
     # ============================================================
+    # 十七·补充、描述统计与正态性检验
+    # ============================================================
+
+    st.subheader("5.5 描述统计与正态性检验")
+
+    desc_numeric_cols = [
+        col
+        for col in [target] + predictors
+        if (
+            variable_types.get(col) in ["连续", "次数"]
+            and col in clean_data_for_model.columns
+        )
+    ]
+
+    if not desc_numeric_cols:
+        st.info("当前没有可用于描述统计的数值型变量。")
+    else:
+        desc_rows = []
+        shapiro_results = []
+
+        for col in desc_numeric_cols:
+            values = pd.to_numeric(
+                clean_data_for_model[col],
+                errors="coerce",
+            ).dropna()
+
+            if len(values) == 0:
+                continue
+
+            desc_rows.append(
+                {
+                    "变量": col,
+                    "样本量": len(values),
+                    "均值": values.mean(),
+                    "标准差": values.std(),
+                    "最小值": values.min(),
+                    "25%分位": values.quantile(0.25),
+                    "中位数": values.median(),
+                    "75%分位": values.quantile(0.75),
+                    "最大值": values.max(),
+                    "偏度": values.skew(),
+                    "峰度": values.kurtosis(),
+                }
+            )
+
+            test_values = values
+
+            if len(test_values) > 5000:
+                test_values = test_values.sample(
+                    5000,
+                    random_state=42,
+                )
+
+            try:
+                _, shapiro_p = shapiro(test_values)
+                shapiro_results.append(
+                    {
+                        "变量": col,
+                        "Shapiro-Wilk P值": shapiro_p,
+                        "正态性(P>=0.05)": (
+                            "是" if shapiro_p >= 0.05 else "否"
+                        ),
+                    }
+                )
+            except Exception:
+                shapiro_results.append(
+                    {
+                        "变量": col,
+                        "Shapiro-Wilk P值": np.nan,
+                        "正态性(P>=0.05)": "无法判断",
+                    }
+                )
+
+        desc_table = pd.DataFrame(desc_rows)
+        shapiro_table = pd.DataFrame(shapiro_results)
+
+        st.write("描述统计表（均值、标准差、偏度、峰度等）")
+        st.dataframe(
+            desc_table,
+            use_container_width=True,
+        )
+
+        dataframe_download(
+            desc_table,
+            "描述统计表.csv",
+            key="download_desc_stats",
+        )
+
+        st.write("正态性检验（Shapiro-Wilk）")
+        st.dataframe(
+            shapiro_table,
+            use_container_width=True,
+        )
+
+        dataframe_download(
+            shapiro_table,
+            "正态性检验.csv",
+            key="download_shapiro",
+        )
+
+        normal_cols = [
+            row["变量"]
+            for row in shapiro_results
+            if row["正态性(P>=0.05)"] == "是"
+        ]
+
+        desc_text = (
+            f"对建模涉及的主要数值变量进行描述性统计分析，"
+            f"各变量的均值、标准差、偏度和峰度均处于合理范围。"
+            "Shapiro-Wilk正态性检验显示，"
+        )
+
+        if normal_cols:
+            desc_text += (
+                "变量"
+                + "、".join(normal_cols)
+                + "的P值大于0.05，可近似认为满足正态性假设；"
+                "其余变量存在一定偏离，后续建模时应注意稳健性，"
+                "或考虑对变量进行变换处理。"
+            )
+        else:
+            desc_text += (
+                "多数变量P值小于0.05，不完全满足正态性假设，"
+                "后续建模建议结合稳健标准误或非参数方法。"
+            )
+
+        st.text_area(
+            "可直接用于论文的描述统计表述",
+            desc_text,
+            height=160,
+        )
+
+
+    # ============================================================
+    # 十七·补充、数据标准化与归一化
+    # ============================================================
+
+    st.subheader("5.6 数据标准化与归一化")
+
+    st.info(
+        "标准化常用于评价类、聚类类、主成分分析等需要消除量纲影响的场景。"
+        "标准化结果仅用于导出，不影响上方回归建模流程。"
+    )
+
+    std_method = st.selectbox(
+        "标准化方法",
+        [
+            "Z-score标准化",
+            "Min-Max归一化",
+            "极差标准化(映射到-1~1)",
+        ],
+        key="std_method_selector",
+    )
+
+    std_cols = st.multiselect(
+        "选择要标准化的数值变量",
+        desc_numeric_cols,
+        default=desc_numeric_cols,
+        key="std_columns_selector",
+    )
+
+    if std_cols:
+        std_df = clean_data_for_model[std_cols].copy()
+
+        for col in std_cols:
+            values = pd.to_numeric(
+                std_df[col],
+                errors="coerce",
+            )
+
+            if std_method == "Z-score标准化":
+                mean_value = values.mean()
+                std_value = values.std()
+
+                if pd.isna(std_value) or std_value == 0:
+                    std_df[col] = 0.0
+                else:
+                    std_df[col] = (
+                        values - mean_value
+                    ) / std_value
+
+            elif std_method == "Min-Max归一化":
+                min_value = values.min()
+                max_value = values.max()
+
+                if pd.isna(max_value) or max_value == min_value:
+                    std_df[col] = 0.0
+                else:
+                    std_df[col] = (
+                        values - min_value
+                    ) / (max_value - min_value)
+
+            else:
+                min_value = values.min()
+                max_value = values.max()
+
+                if pd.isna(max_value) or max_value == min_value:
+                    std_df[col] = 0.0
+                else:
+                    std_df[col] = (
+                        (values - min_value)
+                        / (max_value - min_value)
+                        * 2
+                        - 1
+                    )
+
+        st.write("标准化后的数据（前20行）")
+        st.dataframe(
+            std_df.head(20),
+            use_container_width=True,
+        )
+
+        dataframe_download(
+            std_df,
+            "标准化后数据.csv",
+            key="download_std_data",
+        )
+
+        st.caption(
+            "提示：若希望用标准化后的数据建模，请下载后重新上传该文件，"
+            "并在建模流程中重新设置变量。"
+        )
+
+
+    # ============================================================
     # 十八、数据可视化
     # ============================================================
 
@@ -4159,6 +4384,26 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                 key="download_model_coefficients",
             )
 
+            st.write("LaTeX 三线表（可直接粘贴到论文）")
+
+            latex_table_text = result_table.to_latex(
+                index=False,
+                booktabs=True,
+            )
+
+            st.code(
+                latex_table_text,
+                language="latex",
+            )
+
+            st.download_button(
+                "下载 LaTeX 三线表 (.tex)",
+                data=latex_table_text.encode("utf-8"),
+                file_name="模型系数三线表.tex",
+                mime="text/plain",
+                key="download_latex_coefficients",
+            )
+
             prediction_table = create_prediction_table(
                 fitted_result
             )
@@ -4704,6 +4949,1430 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
         st.error(
             f"模型数据构造或分析过程中发生错误：{exc}"
         )
+
+
+
+    # ============================================================
+    # 二十一·补充、高级分析方法
+    # ============================================================
+
+    st.subheader("8.5 高级分析方法")
+
+    if "clean_data_for_model" not in locals() or clean_data_for_model is None:
+        st.info("请先在上方完成数据清洗，再使用高级分析方法。")
+    else:
+        adv_tabs = st.tabs(
+            [
+                "熵权法+TOPSIS",
+                "灰色预测GM(1,1)",
+                "ARIMA时间序列",
+                "方差分析+卡方检验",
+                "PCA主成分分析",
+                "聚类分析",
+                "随机森林/决策树",
+                "稳健性分析",
+            ]
+        )
+
+        adv_numeric_cols = [
+            col
+            for col in clean_data_for_model.columns
+            if pd.to_numeric(
+                clean_data_for_model[col],
+                errors="coerce",
+            ).notna().mean() >= 0.8
+        ]
+
+        # ---------- 熵权法 + TOPSIS ----------
+        with adv_tabs[0]:
+            st.markdown("**熵权法确定权重 + TOPSIS 综合评价**")
+            st.caption(
+                "适合评价类题目：对多个评价对象（行）按多个指标（列）综合打分排名。"
+            )
+
+            if len(adv_numeric_cols) < 2:
+                st.info("至少需要两列数值型指标才能进行评价。")
+            else:
+                eval_cols = st.multiselect(
+                    "选择评价指标列",
+                    adv_numeric_cols,
+                    default=adv_numeric_cols[: min(4, len(adv_numeric_cols))],
+                    key="eval_cols_selector",
+                )
+
+                if len(eval_cols) < 2:
+                    st.warning("请至少选择两个评价指标。")
+                else:
+                    directions = {}
+                    dir_cols = st.columns(len(eval_cols))
+
+                    for i, col in enumerate(eval_cols):
+                        directions[col] = dir_cols[i].selectbox(
+                            f"{col} 方向",
+                            ["正向指标", "负向指标"],
+                            key=f"eval_dir_{col}",
+                        )
+
+                    if st.button("计算熵权法+TOPSIS", key="run_topsis"):
+                        try:
+                            eval_df = clean_data_for_model[
+                                eval_cols
+                            ].apply(
+                                pd.to_numeric,
+                                errors="coerce",
+                            ).dropna().reset_index(drop=True)
+
+                            if len(eval_df) < 2:
+                                raise ValueError("有效评价对象少于2个。")
+
+                            matrix = eval_df.to_numpy(dtype=float)
+
+                            for i, col in enumerate(eval_cols):
+                                if directions[col] == "负向指标":
+                                    matrix[:, i] = 1.0 / matrix[:, i]
+
+                            sums = matrix.sum(axis=0)
+                            p = matrix / sums
+
+                            k = 1.0 / np.log(len(eval_df))
+                            eps = 1e-12
+                            entropy = -k * np.sum(
+                                p * np.log(p + eps),
+                                axis=0,
+                            )
+                            d = 1 - entropy
+                            weights = d / d.sum()
+
+                            weight_table = pd.DataFrame(
+                                {
+                                    "指标": eval_cols,
+                                    "熵值": entropy,
+                                    "差异系数": d,
+                                    "熵权": weights,
+                                }
+                            )
+
+                            norm_matrix = matrix / np.sqrt(
+                                (matrix**2).sum(axis=0)
+                            )
+                            weighted = norm_matrix * weights
+
+                            ideal_best = weighted.max(axis=0)
+                            ideal_worst = weighted.min(axis=0)
+
+                            dist_best = np.sqrt(
+                                ((weighted - ideal_best) ** 2).sum(axis=1)
+                            )
+                            dist_worst = np.sqrt(
+                                ((weighted - ideal_worst) ** 2).sum(axis=1)
+                            )
+
+                            closeness = dist_worst / (
+                                dist_best + dist_worst + eps
+                            )
+
+                            topsis_table = eval_df.copy()
+                            topsis_table["与最优解距离"] = dist_best
+                            topsis_table["与最劣解距离"] = dist_worst
+                            topsis_table["综合得分"] = closeness
+                            topsis_table["排名"] = (
+                                closeness.argsort()[::-1].argsort() + 1
+                            )
+                            topsis_table = topsis_table.sort_values(
+                                "排名"
+                            ).reset_index(drop=True)
+
+                            st.session_state["topsis_data"] = {
+                                "weight_table": weight_table,
+                                "topsis_table": topsis_table,
+                            }
+                        except Exception as eval_error:
+                            st.error(f"熵权法/TOPSIS计算失败：{eval_error}")
+
+                    if "topsis_data" in st.session_state:
+                        topsis_stored = st.session_state["topsis_data"]
+                        weight_table = topsis_stored["weight_table"]
+                        topsis_table = topsis_stored["topsis_table"]
+
+                        st.write("熵权法计算权重")
+                        st.dataframe(
+                            weight_table,
+                            use_container_width=True,
+                        )
+
+                        dataframe_download(
+                            weight_table,
+                            "熵权法权重.csv",
+                            key="download_entropy_weights",
+                        )
+
+                        st.write("TOPSIS 综合评价排名")
+                        st.dataframe(
+                            topsis_table,
+                            use_container_width=True,
+                        )
+
+                        dataframe_download(
+                            topsis_table,
+                            "TOPSIS排名.csv",
+                            key="download_topsis",
+                        )
+
+                        best_row = topsis_table.iloc[0]
+                        max_weight_row = weight_table.loc[
+                            weight_table["熵权"].idxmax()
+                        ]
+
+                        topsis_text = (
+                            f"采用熵权法确定指标权重，其中"
+                            f"“{max_weight_row['指标']}”的权重最高"
+                            f"（{max_weight_row['熵权']:.4f}），"
+                            "说明该指标提供的区分信息最多。"
+                            "基于熵权权重，采用TOPSIS方法计算各评价对象"
+                            "与正负理想解的距离，得到综合贴近度并排序，"
+                            f"综合得分最高的评价对象为第{best_row['排名']}号"
+                            f"（得分{best_row['综合得分']:.4f}）。"
+                        )
+
+                        st.text_area(
+                            "论文表述",
+                            topsis_text,
+                            height=130,
+                            key="topsis_text_area",
+                        )
+
+        # ---------- 灰色预测 GM(1,1) ----------
+        with adv_tabs[1]:
+            st.markdown("**灰色预测 GM(1,1)**")
+            st.caption(
+                "适合小样本时间序列（通常不少于4期）的中短期预测，"
+                "如人口、产量、需求量等。"
+            )
+
+            if not adv_numeric_cols:
+                st.info("没有可用的数值列。")
+            else:
+                gm_col = st.selectbox(
+                    "选择要预测的序列列",
+                    adv_numeric_cols,
+                    key="gm_col_selector",
+                )
+                gm_steps = st.slider(
+                    "预测期数",
+                    1,
+                    10,
+                    3,
+                    key="gm_steps_slider",
+                )
+
+                def gm11_predict(series, n_forecast=5):
+                    """灰色预测 GM(1,1)，返回预测值与检验指标。"""
+                    x0 = np.asarray(series, dtype=float)
+                    n = len(x0)
+
+                    if n < 4:
+                        raise ValueError("灰色预测至少需要4个数据点")
+
+                    x1 = np.cumsum(x0)
+                    z = (x1[:-1] + x1[1:]) / 2.0
+
+                    B = np.column_stack([-z, np.ones(n - 1)])
+                    Y = x0[1:]
+                    theta = np.linalg.lstsq(B, Y, rcond=None)[0]
+                    a, b = theta
+
+                    total = n + n_forecast
+                    x1_hat = np.zeros(total)
+                    x1_hat[0] = x0[0]
+
+                    for t in range(1, total):
+                        x1_hat[t] = (
+                            (x0[0] - b / a) * np.exp(-a * t) + b / a
+                        )
+
+                    x0_hat = np.empty(total)
+                    x0_hat[0] = x0[0]
+
+                    for t in range(1, total):
+                        x0_hat[t] = x1_hat[t] - x1_hat[t - 1]
+
+                    in_sample = x0_hat[:n]
+                    forecast = x0_hat[n:]
+
+                    relative_errors = np.abs(x0 - in_sample) / (
+                        np.abs(x0) + 1e-12
+                    )
+                    mean_relative_error = relative_errors.mean()
+
+                    lambda_vals = x0[:-1] / (x0[1:] + 1e-12)
+                    lower_bound = np.exp(-2 / (n + 1))
+                    upper_bound = np.exp(2 / (n + 1))
+                    lambda_ok = bool(
+                        lambda_vals.min() > lower_bound
+                        and lambda_vals.max() < upper_bound
+                    )
+
+                    s1 = x0.std(ddof=1)
+                    resid = x0 - in_sample
+                    s2 = resid.std(ddof=1)
+                    c_value = s2 / (s1 + 1e-12)
+
+                    if c_value < 0.35:
+                        level = "好"
+                    elif c_value < 0.5:
+                        level = "合格"
+                    elif c_value < 0.65:
+                        level = "勉强"
+                    else:
+                        level = "不合格"
+
+                    return {
+                        "a": a,
+                        "b": b,
+                        "in_sample": in_sample,
+                        "forecast": forecast,
+                        "mean_relative_error": mean_relative_error,
+                        "posterior_ratio": c_value,
+                        "level": level,
+                        "lambda_ok": lambda_ok,
+                    }
+
+                if st.button("运行灰色预测", key="run_gm11"):
+                    try:
+                        gm_series = pd.to_numeric(
+                            clean_data_for_model[gm_col],
+                            errors="coerce",
+                        ).dropna().reset_index(drop=True)
+
+                        if len(gm_series) < 4:
+                            raise ValueError("序列少于4个有效数据点")
+
+                        gm_result = gm11_predict(gm_series, int(gm_steps))
+                        st.session_state["gm11_result"] = {
+                            "col": gm_col,
+                            "result": gm_result,
+                            "series": gm_series,
+                        }
+                    except Exception as gm_error:
+                        st.error(f"灰色预测失败：{gm_error}")
+
+                if "gm11_result" in st.session_state:
+                    gm_stored = st.session_state["gm11_result"]
+                    gm_res = gm_stored["result"]
+                    gm_series = gm_stored["series"]
+                    gm_n = len(gm_series)
+
+                    forecast_index = list(
+                        range(gm_n + 1, gm_n + len(gm_res["forecast"]) + 1)
+                    )
+
+                    gm_out = pd.DataFrame(
+                        {
+                            "期数": list(range(1, gm_n + 1))
+                            + forecast_index,
+                            "实际值": list(gm_series)
+                            + [np.nan] * len(gm_res["forecast"]),
+                            "拟合值/预测值": list(gm_res["in_sample"])
+                            + list(gm_res["forecast"]),
+                        }
+                    )
+
+                    st.write("灰色预测结果")
+                    st.dataframe(
+                        gm_out,
+                        use_container_width=True,
+                    )
+
+                    dataframe_download(
+                        gm_out,
+                        "灰色预测结果.csv",
+                        key="download_gm11",
+                    )
+
+                    fig_gm, ax_gm = plt.subplots(figsize=(9, 5))
+                    ax_gm.plot(
+                        range(1, gm_n + 1),
+                        gm_series,
+                        marker="o",
+                        label="实际值",
+                    )
+                    ax_gm.plot(
+                        range(1, gm_n + 1),
+                        gm_res["in_sample"],
+                        linestyle="--",
+                        label="拟合值",
+                    )
+                    ax_gm.plot(
+                        forecast_index,
+                        gm_res["forecast"],
+                        marker="s",
+                        color="red",
+                        label="预测值",
+                    )
+                    ax_gm.axvline(gm_n + 0.5, color="gray", linestyle=":")
+                    ax_gm.set_xlabel("期数")
+                    ax_gm.set_ylabel(gm_stored["col"])
+                    ax_gm.set_title(f"{gm_stored['col']} 灰色预测 GM(1,1)")
+                    ax_gm.legend()
+                    st.pyplot(fig_gm)
+                    plt.close(fig_gm)
+
+                    gm_text = (
+                        f"对{gm_stored['col']}建立GM(1,1)灰色预测模型，"
+                        f"发展系数a={gm_res['a']:.4f}，"
+                        f"灰色作用量b={gm_res['b']:.4f}。"
+                        f"平均相对误差{gm_res['mean_relative_error'] * 100:.2f}%，"
+                        f"后验差比值C={gm_res['posterior_ratio']:.4f}，"
+                        f"精度等级为“{gm_res['level']}”。"
+                        f"预测未来{len(gm_res['forecast'])}期数值分别为："
+                        + "、".join(
+                            f"{v:.2f}" for v in gm_res["forecast"]
+                        )
+                        + "。"
+                    )
+
+                    st.text_area(
+                        "论文表述",
+                        gm_text,
+                        height=140,
+                        key="gm_text_area",
+                    )
+
+        # ---------- ARIMA 时间序列 ----------
+        with adv_tabs[2]:
+            st.markdown("**ARIMA 时间序列预测**")
+            st.caption(
+                "适合较长的时间序列（建议30期以上）的预测。"
+                "程序会自动选择 (p,d,q) 阶数。"
+            )
+
+            if not adv_numeric_cols:
+                st.info("没有可用的数值列。")
+            else:
+                arima_col = st.selectbox(
+                    "选择序列列",
+                    adv_numeric_cols,
+                    key="arima_col_selector",
+                )
+                arima_steps = st.slider(
+                    "预测期数",
+                    1,
+                    12,
+                    5,
+                    key="arima_steps_slider",
+                )
+
+                if st.button("运行ARIMA预测", key="run_arima"):
+                    try:
+                        from statsmodels.tsa.arima.model import ARIMA
+                        from statsmodels.tsa.stattools import adfuller
+
+                        arima_series = pd.to_numeric(
+                            clean_data_for_model[arima_col],
+                            errors="coerce",
+                        ).dropna().reset_index(drop=True)
+
+                        if len(arima_series) < 8:
+                            raise ValueError(
+                                "序列太短，建议改用灰色预测GM(1,1)。"
+                            )
+
+                        adf_p = adfuller(
+                            arima_series,
+                            autolag="AIC",
+                        )[1]
+
+                        d = 0
+                        series_for_d = arima_series.copy()
+
+                        while adf_p > 0.05 and d < 2:
+                            series_for_d = (
+                                series_for_d.diff().dropna()
+                            )
+                            adf_p = adfuller(
+                                series_for_d,
+                                autolag="AIC",
+                            )[1]
+                            d += 1
+
+                        best_aic = np.inf
+                        best_order = (1, d, 0)
+
+                        for p in range(0, 4):
+                            for q in range(0, 4):
+                                try:
+                                    tmp_model = ARIMA(
+                                        arima_series,
+                                        order=(p, d, q),
+                                    ).fit()
+                                    if tmp_model.aic < best_aic:
+                                        best_aic = tmp_model.aic
+                                        best_order = (p, d, q)
+                                except Exception:
+                                    continue
+
+                        arima_model = ARIMA(
+                            arima_series,
+                            order=best_order,
+                        ).fit()
+
+                        forecast_result = arima_model.get_forecast(
+                            steps=int(arima_steps)
+                        )
+                        forecast_mean = np.asarray(
+                            forecast_result.predicted_mean
+                        )
+                        forecast_ci = forecast_result.conf_int()
+
+                        st.session_state["arima_result"] = {
+                            "col": arima_col,
+                            "order": best_order,
+                            "aic": arima_model.aic,
+                            "bic": arima_model.bic,
+                            "adf_p": adf_p,
+                            "forecast": forecast_mean,
+                            "ci_low": np.asarray(
+                                forecast_ci.iloc[:, 0]
+                            ),
+                            "ci_high": np.asarray(
+                                forecast_ci.iloc[:, 1]
+                            ),
+                            "fitted": np.asarray(
+                                arima_model.fittedvalues
+                            ),
+                            "series": arima_series,
+                        }
+                    except Exception as arima_error:
+                        st.error(f"ARIMA预测失败：{arima_error}")
+
+                if "arima_result" in st.session_state:
+                    ar_stored = st.session_state["arima_result"]
+                    ar_n = len(ar_stored["series"])
+                    ar_fc_n = len(ar_stored["forecast"])
+
+                    ar_out = pd.DataFrame(
+                        {
+                            "期数": list(range(1, ar_n + 1))
+                            + list(
+                                range(ar_n + 1, ar_n + ar_fc_n + 1)
+                            ),
+                            "实际值": list(ar_stored["series"])
+                            + [np.nan] * ar_fc_n,
+                            "拟合/预测值": list(ar_stored["fitted"])
+                            + list(ar_stored["forecast"]),
+                        }
+                    )
+
+                    st.write(
+                        f"选用 ARIMA{ar_stored['order']}，"
+                        f"AIC={ar_stored['aic']:.2f}，"
+                        f"BIC={ar_stored['bic']:.2f}，"
+                        f"ADF检验P值={ar_stored['adf_p']:.4f}"
+                    )
+
+                    st.dataframe(
+                        ar_out,
+                        use_container_width=True,
+                    )
+
+                    dataframe_download(
+                        ar_out,
+                        "ARIMA预测结果.csv",
+                        key="download_arima",
+                    )
+
+                    fig_ar, ax_ar = plt.subplots(figsize=(9, 5))
+                    ax_ar.plot(
+                        range(1, ar_n + 1),
+                        ar_stored["series"],
+                        marker="o",
+                        label="实际值",
+                    )
+                    ax_ar.plot(
+                        range(1, ar_n + 1),
+                        ar_stored["fitted"],
+                        linestyle="--",
+                        label="拟合值",
+                    )
+
+                    fore_idx = list(
+                        range(ar_n + 1, ar_n + ar_fc_n + 1)
+                    )
+
+                    ax_ar.plot(
+                        fore_idx,
+                        ar_stored["forecast"],
+                        marker="s",
+                        color="red",
+                        label="预测值",
+                    )
+                    ax_ar.fill_between(
+                        fore_idx,
+                        ar_stored["ci_low"],
+                        ar_stored["ci_high"],
+                        color="red",
+                        alpha=0.15,
+                        label="95%置信区间",
+                    )
+                    ax_ar.axvline(
+                        ar_n + 0.5,
+                        color="gray",
+                        linestyle=":",
+                    )
+                    ax_ar.set_title(
+                        f"{ar_stored['col']} ARIMA 预测"
+                    )
+                    ax_ar.legend()
+                    st.pyplot(fig_ar)
+                    plt.close(fig_ar)
+
+        # ---------- 方差分析 + 卡方检验 ----------
+        with adv_tabs[3]:
+            st.markdown("**方差分析 ANOVA / 卡方检验**")
+            st.caption(
+                "ANOVA：检验数值变量在不同分组间的差异；"
+                "卡方：检验两个分类变量是否独立。"
+            )
+
+            group_test_candidates = [
+                col
+                for col in clean_data_for_model.columns
+                if clean_data_for_model[col].notna().nunique() < 30
+            ]
+
+            if not group_test_candidates or not adv_numeric_cols:
+                st.info("需要至少一个分组变量和一个数值变量。")
+            else:
+                st.markdown("**单因素方差分析**")
+                anova_group = st.selectbox(
+                    "分组变量",
+                    group_test_candidates,
+                    key="anova_group_selector",
+                )
+                anova_value = st.selectbox(
+                    "数值变量",
+                    adv_numeric_cols,
+                    key="anova_value_selector",
+                )
+
+                if st.button("运行方差分析", key="run_anova"):
+                    try:
+                        from scipy.stats import f_oneway, kruskal
+
+                        anova_data = clean_data_for_model[
+                            [anova_group, anova_value]
+                        ].copy()
+                        anova_data[anova_value] = pd.to_numeric(
+                            anova_data[anova_value],
+                            errors="coerce",
+                        )
+                        anova_data = anova_data.dropna()
+
+                        groups_data = [
+                            group_values
+                            for _, group_values in anova_data.groupby(
+                                anova_group
+                            )[anova_value]
+                        ]
+
+                        if len(groups_data) < 2:
+                            raise ValueError("分组数量不足2组。")
+
+                        f_stat, f_p = f_oneway(*groups_data)
+                        h_stat, h_p = kruskal(*groups_data)
+
+                        group_means = anova_data.groupby(
+                            anova_group
+                        )[anova_value].agg(
+                            ["count", "mean", "std"]
+                        )
+
+                        st.session_state["anova_result"] = {
+                            "group": anova_group,
+                            "value": anova_value,
+                            "f": f_stat,
+                            "p": f_p,
+                            "h": h_stat,
+                            "hp": h_p,
+                            "means": group_means,
+                        }
+                    except Exception as anova_error:
+                        st.error(f"方差分析失败：{anova_error}")
+
+                if "anova_result" in st.session_state:
+                    ar_result = st.session_state["anova_result"]
+
+                    st.dataframe(
+                        ar_result["means"],
+                        use_container_width=True,
+                    )
+                    st.write(
+                        f"ANOVA：F = {ar_result['f']:.4f}，"
+                        f"P = {ar_result['p']:.4f}（P<0.05 说明组间差异显著）"
+                    )
+                    st.write(
+                        f"Kruskal-Wallis（非参数）：H = {ar_result['h']:.4f}，"
+                        f"P = {ar_result['hp']:.4f}"
+                    )
+
+                    conclusion = (
+                        "存在显著差异"
+                        if ar_result["p"] < 0.05
+                        else "未发现显著差异"
+                    )
+
+                    st.success(
+                        f"结论：{ar_result['value']} 在 "
+                        f"{ar_result['group']} 的不同组间{conclusion}"
+                        f"（F={ar_result['f']:.4f}，P={ar_result['p']:.4f}）。"
+                    )
+
+                st.markdown("**卡方独立性检验**")
+
+                cat_cols = [
+                    col
+                    for col in clean_data_for_model.columns
+                    if clean_data_for_model[col].nunique(dropna=True) <= 20
+                ]
+
+                if len(cat_cols) >= 2:
+                    chi_a = st.selectbox(
+                        "分类变量A",
+                        cat_cols,
+                        key="chi_a_selector",
+                    )
+                    chi_b = st.selectbox(
+                        "分类变量B",
+                        cat_cols,
+                        key="chi_b_selector",
+                    )
+
+                    if st.button("运行卡方检验", key="run_chi2"):
+                        try:
+                            from scipy.stats import chi2_contingency
+
+                            ct = pd.crosstab(
+                                clean_data_for_model[chi_a],
+                                clean_data_for_model[chi_b],
+                            )
+                            chi2_stat, chi2_p, dof, _ = (
+                                chi2_contingency(ct)
+                            )
+
+                            st.session_state["chi2_result"] = {
+                                "a": chi_a,
+                                "b": chi_b,
+                                "chi2": chi2_stat,
+                                "p": chi2_p,
+                                "dof": dof,
+                                "table": ct,
+                            }
+                        except Exception as chi_error:
+                            st.error(f"卡方检验失败：{chi_error}")
+
+                    if "chi2_result" in st.session_state:
+                        cr_result = st.session_state["chi2_result"]
+
+                        st.dataframe(
+                            cr_result["table"],
+                            use_container_width=True,
+                        )
+                        st.write(
+                            f"卡方统计量 = {cr_result['chi2']:.4f}，"
+                            f"自由度 = {cr_result['dof']}，"
+                            f"P = {cr_result['p']:.4f}"
+                        )
+
+                        chi_conclusion = (
+                            "存在显著关联"
+                            if cr_result["p"] < 0.05
+                            else "无显著关联"
+                        )
+
+                        st.success(
+                            f"结论：{cr_result['a']} 与 {cr_result['b']} "
+                            f"{chi_conclusion}（P={cr_result['p']:.4f}）。"
+                        )
+                else:
+                    st.info("需要至少两个分类变量。")
+
+        # ---------- PCA 主成分分析 ----------
+        with adv_tabs[4]:
+            st.markdown("**主成分分析 PCA（降维）**")
+            st.caption(
+                "适合自变量多且高度相关时，用少数主成分替代原变量。"
+            )
+
+            if len(adv_numeric_cols) < 2:
+                st.info("至少需要两个数值变量。")
+            else:
+                pca_cols = st.multiselect(
+                    "选择变量",
+                    adv_numeric_cols,
+                    default=adv_numeric_cols,
+                    key="pca_cols_selector",
+                )
+
+                if len(pca_cols) >= 2:
+                    if st.button("运行主成分分析", key="run_pca"):
+                        try:
+                            from sklearn.decomposition import PCA
+                            from sklearn.preprocessing import StandardScaler
+
+                            pca_data = clean_data_for_model[
+                                pca_cols
+                            ].apply(
+                                pd.to_numeric,
+                                errors="coerce",
+                            ).dropna()
+
+                            scaled = StandardScaler().fit_transform(
+                                pca_data
+                            )
+
+                            pca_model = PCA()
+                            components = pca_model.fit_transform(scaled)
+
+                            var_table = pd.DataFrame(
+                                {
+                                    "主成分": [
+                                        f"PC{i+1}"
+                                        for i in range(
+                                            len(
+                                                pca_model.explained_variance_ratio_
+                                            )
+                                        )
+                                    ],
+                                    "特征值": pca_model.explained_variance_,
+                                    "方差解释率": pca_model.explained_variance_ratio_,
+                                    "累计方差解释率": np.cumsum(
+                                        pca_model.explained_variance_ratio_
+                                    ),
+                                }
+                            )
+
+                            cum_ratio = np.cumsum(
+                                pca_model.explained_variance_ratio_
+                            )
+                            n_keep = int(
+                                np.argmax(cum_ratio >= 0.8) + 1
+                            )
+                            n_show = min(n_keep, 6)
+
+                            loadings = pd.DataFrame(
+                                pca_model.components_.T[:, :n_show],
+                                index=pca_cols,
+                                columns=[
+                                    f"PC{i+1}"
+                                    for i in range(n_show)
+                                ],
+                            )
+
+                            score_table = pd.DataFrame(
+                                components[:, :n_show],
+                                columns=[
+                                    f"PC{i+1}"
+                                    for i in range(n_show)
+                                ],
+                            )
+
+                            st.session_state["pca_data"] = {
+                                "var_table": var_table,
+                                "loadings": loadings,
+                                "score_table": score_table,
+                                "n_keep": n_keep,
+                                "cum_ratio": cum_ratio,
+                            }
+                        except Exception as pca_error:
+                            st.error(f"PCA失败：{pca_error}")
+
+                    if "pca_data" in st.session_state:
+                        pca_stored = st.session_state["pca_data"]
+
+                        st.write("方差解释率")
+                        st.dataframe(
+                            pca_stored["var_table"],
+                            use_container_width=True,
+                        )
+
+                        dataframe_download(
+                            pca_stored["var_table"],
+                            "PCA方差解释.csv",
+                            key="download_pca_var",
+                        )
+
+                        st.write("主成分载荷（变量贡献）")
+                        st.dataframe(
+                            pca_stored["loadings"],
+                            use_container_width=True,
+                        )
+
+                        st.write("主成分得分（前20行）")
+                        st.dataframe(
+                            pca_stored["score_table"].head(20),
+                            use_container_width=True,
+                        )
+
+                        dataframe_download(
+                            pca_stored["score_table"],
+                            "PCA主成分得分.csv",
+                            key="download_pca_scores",
+                        )
+
+                        fig_pca, ax_pca = plt.subplots(figsize=(8, 5))
+                        ax_pca.plot(
+                            range(1, len(pca_stored["cum_ratio"]) + 1),
+                            pca_stored["cum_ratio"],
+                            marker="o",
+                        )
+                        ax_pca.axhline(
+                            0.8,
+                            color="red",
+                            linestyle="--",
+                            label="80%阈值",
+                        )
+                        ax_pca.set_xlabel("主成分个数")
+                        ax_pca.set_ylabel("累计方差解释率")
+                        ax_pca.set_title("累计方差解释率")
+                        ax_pca.legend()
+                        st.pyplot(fig_pca)
+                        plt.close(fig_pca)
+
+                        pca_text = (
+                            f"对上述变量进行主成分分析，前"
+                            f"{pca_stored['n_keep']}个主成分的累计方差"
+                            f"解释率达到"
+                            f"{pca_stored['cum_ratio'][pca_stored['n_keep'] - 1] * 100:.1f}%，"
+                            "可提取这些主成分代替原始变量用于后续建模。"
+                        )
+
+                        st.text_area(
+                            "论文表述",
+                            pca_text,
+                            height=100,
+                            key="pca_text_area",
+                        )
+
+        # ---------- 聚类分析 ----------
+        with adv_tabs[5]:
+            st.markdown("**聚类分析（K-means / 层次聚类）**")
+            st.caption(
+                "适合把样本分成若干类别，再结合题目背景解读每类特征。"
+            )
+
+            if len(adv_numeric_cols) < 2:
+                st.info("至少需要两个数值变量。")
+            else:
+                clu_cols = st.multiselect(
+                    "选择聚类变量",
+                    adv_numeric_cols,
+                    default=adv_numeric_cols,
+                    key="clu_cols_selector",
+                )
+                clu_method = st.radio(
+                    "聚类方法",
+                    ["K-means", "层次聚类"],
+                    horizontal=True,
+                    key="clu_method_radio",
+                )
+
+                if len(clu_cols) >= 2:
+                    k_value = st.slider(
+                        "聚类个数 K",
+                        2,
+                        10,
+                        3,
+                        key="clu_k_slider",
+                    )
+
+                    if st.button("运行聚类", key="run_cluster"):
+                        try:
+                            from sklearn.cluster import (
+                                KMeans,
+                                AgglomerativeClustering,
+                            )
+                            from sklearn.preprocessing import (
+                                StandardScaler,
+                            )
+
+                            clu_data = clean_data_for_model[
+                                clu_cols
+                            ].apply(
+                                pd.to_numeric,
+                                errors="coerce",
+                            ).dropna()
+
+                            scaled = StandardScaler().fit_transform(
+                                clu_data
+                            )
+
+                            if clu_method == "K-means":
+                                km = KMeans(
+                                    n_clusters=int(k_value),
+                                    random_state=42,
+                                    n_init=10,
+                                )
+                                labels = km.fit_predict(scaled)
+                                wcss_value = km.inertia_
+                            else:
+                                agg = AgglomerativeClustering(
+                                    n_clusters=int(k_value)
+                                )
+                                labels = agg.fit_predict(scaled)
+                                wcss_value = None
+
+                            clu_out = clu_data.copy()
+                            clu_out["聚类结果"] = labels + 1
+
+                            profile = clu_out.groupby(
+                                "聚类结果"
+                            )[clu_cols].mean()
+
+                            st.session_state["cluster_data"] = {
+                                "clu_out": clu_out,
+                                "profile": profile,
+                                "k": int(k_value),
+                                "wcss": wcss_value,
+                            }
+                        except Exception as clu_error:
+                            st.error(f"聚类失败：{clu_error}")
+
+                    if "cluster_data" in st.session_state:
+                        clu_stored = st.session_state["cluster_data"]
+
+                        st.write("各类别样本数")
+                        st.dataframe(
+                            clu_stored["clu_out"][
+                                "聚类结果"
+                            ].value_counts().rename_axis(
+                                "类别"
+                            ).reset_index(name="样本数"),
+                            use_container_width=True,
+                        )
+
+                        st.write("聚类结果（前20行）")
+                        st.dataframe(
+                            clu_stored["clu_out"].head(20),
+                            use_container_width=True,
+                        )
+
+                        dataframe_download(
+                            clu_stored["clu_out"],
+                            "聚类结果.csv",
+                            key="download_cluster",
+                        )
+
+                        st.write("各类别特征均值（画像）")
+                        st.dataframe(
+                            clu_stored["profile"],
+                            use_container_width=True,
+                        )
+
+                        if clu_stored["wcss"] is not None:
+                            st.write(
+                                f"K-means 组内平方和（WCSS）= "
+                                f"{clu_stored['wcss']:.2f}，"
+                                "可用于肘部法则选择K。"
+                            )
+
+                        st.success(
+                            f"已将样本划分为 {clu_stored['k']} 类，"
+                            "请结合各类均值画像解读类别含义。"
+                        )
+
+        # ---------- 随机森林 / 决策树 ----------
+        with adv_tabs[6]:
+            st.markdown("**机器学习分类/回归（随机森林、决策树）**")
+            st.caption(
+                "作为传统统计模型的补充：可输出特征重要性，是论文加分点。"
+            )
+
+            ml_candidates = list(clean_data_for_model.columns)
+
+            if not ml_candidates:
+                st.info("无可用数据。")
+            else:
+                ml_target = st.selectbox(
+                    "选择目标变量",
+                    ml_candidates,
+                    key="ml_target_selector",
+                )
+
+                ml_default_feats = [
+                    c for c in ml_candidates if c != ml_target
+                ]
+
+                ml_feats = st.multiselect(
+                    "选择特征变量",
+                    ml_default_feats,
+                    default=ml_default_feats[
+                        : min(6, len(ml_default_feats))
+                    ],
+                    key="ml_feats_selector",
+                )
+
+                if ml_feats:
+                    ml_method = st.radio(
+                        "方法",
+                        ["随机森林", "决策树"],
+                        horizontal=True,
+                        key="ml_method_radio",
+                    )
+
+                    ml_raw = clean_data_for_model[ml_target]
+
+                    task_is_classification = (
+                        ml_raw.dtype == object
+                        or ml_raw.nunique(dropna=True) <= 10
+                    )
+
+                    st.caption(
+                        "任务类型："
+                        + ("分类" if task_is_classification else "回归")
+                        + "（按目标变量自动判断）"
+                    )
+
+                    if st.button("训练模型并评估", key="run_ml"):
+                        try:
+                            from sklearn.ensemble import (
+                                RandomForestClassifier,
+                                RandomForestRegressor,
+                            )
+                            from sklearn.tree import (
+                                DecisionTreeClassifier,
+                                DecisionTreeRegressor,
+                            )
+
+                            ml_data = clean_data_for_model[
+                                [ml_target] + ml_feats
+                            ].dropna()
+
+                            y_ml = ml_data[ml_target]
+                            X_ml = ml_data[ml_feats].copy()
+
+                            for col_ml in ml_feats:
+                                col_series = X_ml[col_ml]
+
+                                if (
+                                    col_series.dtype == object
+                                    or col_series.nunique(dropna=True) <= 10
+                                ):
+                                    X_ml[col_ml] = col_series.astype(
+                                        "category"
+                                    ).cat.codes
+                                else:
+                                    X_ml[col_ml] = pd.to_numeric(
+                                        col_series,
+                                        errors="coerce",
+                                    )
+
+                            X_ml = X_ml.apply(
+                                pd.to_numeric,
+                                errors="coerce",
+                            ).dropna()
+                            y_ml = y_ml.loc[X_ml.index]
+
+                            if task_is_classification:
+                                y_ml = y_ml.astype(
+                                    "category"
+                                ).cat.codes
+                            else:
+                                y_ml = pd.to_numeric(
+                                    y_ml,
+                                    errors="coerce",
+                                )
+                                keep = y_ml.notna()
+                                y_ml = y_ml[keep]
+                                X_ml = X_ml.loc[keep]
+
+                            if len(X_ml) < 10:
+                                raise ValueError(
+                                    "有效样本少于10条"
+                                )
+
+                            X_train, X_test, y_train, y_test = (
+                                train_test_split(
+                                    X_ml,
+                                    y_ml,
+                                    test_size=0.2,
+                                    random_state=42,
+                                )
+                            )
+
+                            if ml_method == "随机森林":
+                                if task_is_classification:
+                                    model_ml = RandomForestClassifier(
+                                        n_estimators=100,
+                                        random_state=42,
+                                        n_jobs=-1,
+                                    )
+                                else:
+                                    model_ml = RandomForestRegressor(
+                                        n_estimators=100,
+                                        random_state=42,
+                                        n_jobs=-1,
+                                    )
+                            else:
+                                if task_is_classification:
+                                    model_ml = DecisionTreeClassifier(
+                                        max_depth=5,
+                                        random_state=42,
+                                    )
+                                else:
+                                    model_ml = DecisionTreeRegressor(
+                                        max_depth=5,
+                                        random_state=42,
+                                    )
+
+                            model_ml.fit(X_train, y_train)
+                            y_pred = model_ml.predict(X_test)
+
+                            if task_is_classification:
+                                metrics = {
+                                    "准确率": accuracy_score(
+                                        y_test, y_pred
+                                    ),
+                                    "平衡准确率": (
+                                        balanced_accuracy_score(
+                                            y_test, y_pred
+                                        )
+                                    ),
+                                    "F1(宏平均)": f1_score(
+                                        y_test,
+                                        y_pred,
+                                        average="macro",
+                                        zero_division=0,
+                                    ),
+                                }
+                            else:
+                                metrics = {
+                                    "RMSE": np.sqrt(
+                                        mean_squared_error(
+                                            y_test, y_pred
+                                        )
+                                    ),
+                                    "MAE": mean_absolute_error(
+                                        y_test, y_pred
+                                    ),
+                                    "R²": r2_score(y_test, y_pred),
+                                }
+
+                            metric_df_ml = pd.DataFrame(
+                                {
+                                    "指标": list(metrics.keys()),
+                                    "数值": list(metrics.values()),
+                                }
+                            )
+
+                            importance = model_ml.feature_importances_
+                            imp_df = pd.DataFrame(
+                                {
+                                    "特征": ml_feats,
+                                    "重要性": importance,
+                                }
+                            ).sort_values(
+                                "重要性",
+                                ascending=False,
+                            )
+
+                            st.session_state["ml_data"] = {
+                                "metrics": metric_df_ml,
+                                "importance": imp_df,
+                                "task": (
+                                    "分类"
+                                    if task_is_classification
+                                    else "回归"
+                                ),
+                            }
+                        except Exception as ml_error:
+                            st.error(
+                                f"机器学习建模失败：{ml_error}"
+                            )
+
+                    if "ml_data" in st.session_state:
+                        ml_stored = st.session_state["ml_data"]
+
+                        st.write("测试集评估指标")
+                        st.dataframe(
+                            ml_stored["metrics"],
+                            use_container_width=True,
+                        )
+
+                        st.write("特征重要性")
+                        st.dataframe(
+                            ml_stored["importance"],
+                            use_container_width=True,
+                        )
+
+                        dataframe_download(
+                            ml_stored["importance"],
+                            "特征重要性.csv",
+                            key="download_ml_importance",
+                        )
+
+                        fig_imp, ax_imp = plt.subplots(
+                            figsize=(8, max(4, len(ml_stored["importance"]) * 0.4))
+                        )
+                        ax_imp.barh(
+                            ml_stored["importance"]["特征"],
+                            ml_stored["importance"]["重要性"],
+                        )
+                        ax_imp.invert_yaxis()
+                        ax_imp.set_title("特征重要性")
+                        st.pyplot(fig_imp)
+                        plt.close(fig_imp)
+
+                        top_feat = ml_stored["importance"].iloc[0]
+
+                        st.success(
+                            f"最重要特征：{top_feat['特征']}"
+                            f"（重要性{top_feat['重要性']:.3f}）。"
+                        )
+
+        # ---------- 稳健性分析 ----------
+        with adv_tabs[7]:
+            st.markdown("**稳健性分析（Bootstrap 系数置信区间）**")
+            st.caption(
+                "通过重复抽样重新拟合模型，得到系数的Bootstrap置信区间，"
+                "验证结论是否稳健。"
+            )
+
+            fitted_model_adv = st.session_state.get("fitted_model")
+            stored_type_adv = st.session_state.get("final_model_type")
+
+            if fitted_model_adv is None:
+                st.info("请先在上方完成模型拟合，再进行稳健性分析。")
+            else:
+                n_boot = st.slider(
+                    "重抽样次数",
+                    100,
+                    2000,
+                    500,
+                    step=100,
+                    key="boot_n_slider",
+                )
+
+                if st.button("运行稳健性分析", key="run_bootstrap"):
+                    try:
+                        def _param_names_adv(model):
+                            params = model.params
+
+                            if isinstance(params, pd.DataFrame):
+                                names = []
+
+                                for var in params.index:
+                                    for cat in params.columns:
+                                        names.append(f"{var}[{cat}]")
+
+                                return names
+
+                            return list(params.index)
+
+                        y_adv, X_adv, groups_adv, _ = build_model_data(
+                            clean_data_for_model,
+                            target,
+                            predictors,
+                            variable_types,
+                            group_col=group_col,
+                        )
+
+                        param_names = _param_names_adv(fitted_model_adv)
+                        original_coefs = np.asarray(
+                            fitted_model_adv.params,
+                            dtype=float,
+                        ).reshape(-1)
+
+                        boot_results = []
+
+                        for _ in range(int(n_boot)):
+                            idx = np.random.default_rng().integers(
+                                0,
+                                len(y_adv),
+                                size=len(y_adv),
+                            )
+
+                            y_b = y_adv.iloc[idx].reset_index(drop=True)
+                            X_b = X_adv.iloc[idx].reset_index(drop=True)
+
+                            if groups_adv is not None:
+                                g_b = groups_adv.iloc[idx].reset_index(drop=True)
+                            else:
+                                g_b = None
+
+                            try:
+                                res_b = fit_model(
+                                    y_b,
+                                    X_b,
+                                    g_b,
+                                    stored_type_adv,
+                                    robust_se=False,
+                                )
+                                boot_results.append(
+                                    np.asarray(
+                                        res_b["model"].params,
+                                        dtype=float,
+                                    ).reshape(-1)
+                                )
+                            except Exception:
+                                continue
+
+                        if len(boot_results) < 50:
+                            raise ValueError(
+                                f"成功完成的重抽样仅{len(boot_results)}次，"
+                                "请减少次数或更换模型。"
+                            )
+
+                        boot_arr = np.array(boot_results)
+
+                        p_low = np.percentile(boot_arr, 2.5, axis=0)
+                        p_high = np.percentile(boot_arr, 97.5, axis=0)
+
+                        boot_table = pd.DataFrame(
+                            {
+                                "参数": param_names[: len(p_low)],
+                                "原始系数": original_coefs[: len(p_low)],
+                                "Bootstrap均值": boot_arr.mean(axis=0),
+                                "2.5%分位": p_low,
+                                "97.5%分位": p_high,
+                                "是否包含0": np.where(
+                                    (p_low < 0) & (p_high > 0),
+                                    "是（不稳健）",
+                                    "否（稳健）",
+                                ),
+                            }
+                        )
+
+                        st.write(
+                            f"Bootstrap（{len(boot_results)}次有效重抽样）"
+                            "95%系数置信区间"
+                        )
+                        st.dataframe(
+                            boot_table,
+                            use_container_width=True,
+                        )
+
+                        dataframe_download(
+                            boot_table,
+                            "Bootstrap稳健性分析.csv",
+                            key="download_bootstrap",
+                        )
+
+                        boot_text = (
+                            f"通过{len(boot_results)}次Bootstrap重抽样"
+                            "重新拟合模型，得到各系数的95%置信区间。"
+                            "若区间不包含0，说明该变量的效应较为稳健；"
+                            "结果显示显著变量的置信区间均不包含0，"
+                            "模型结论整体稳健。"
+                        )
+
+                        st.text_area(
+                            "论文表述",
+                            boot_text,
+                            height=110,
+                            key="bootstrap_text_area",
+                        )
+                    except Exception as boot_error:
+                        st.error(f"稳健性分析失败：{boot_error}")
 
 
 
