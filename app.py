@@ -1,5 +1,5 @@
 from pathlib import Path
-import io
+
 import base64
 import os
 import re
@@ -2548,91 +2548,48 @@ def generate_assumptions(
 # 十一、侧边栏设置
 # ============================================================
 
-    header_html = """
-    <style>
-    .furry-header {
-        display: flex;
-        align-items: center;
-        gap: 18px;
-        margin: 8px 0 4px 0;
-        min-height: 150px;
-    }
 
-    .furry-title {
-        flex: 1;
-        min-width: 0;
-    }
-
-    .furry-title h1 {
-        margin: 0;
-        color: #243447;
-        font-size: clamp(28px, 3.2vw, 48px);
-        line-height: 1.2;
-        font-weight: 750;
-        letter-spacing: 0;
-    }
-
-    .furry-title p {
-        margin: 12px 0 0 0;
-        color: #687586;
-        font-size: 16px;
-        line-height: 1.6;
-    }
-
-    .fursona-image {
-        width: min(270px, 30vw);
-        max-height: 170px;
-        object-fit: contain;
-        object-position: center;
-        flex-shrink: 0;
-    }
-
-    @media (max-width: 700px) {
-        .furry-header {
-            gap: 8px;
-            min-height: 105px;
-        }
-
-        .fursona-image {
-            width: 125px;
-            max-height: 105px;
-        }
-
-        .furry-title h1 {
-            font-size: 25px;
-        }
-
-        .furry-title p {
-            font-size: 13px;
-            line-height: 1.4;
-        }
-    }
-    </style>
-
-    <div class="furry-header">
-        <div class="furry-title">
-            <h1>数学建模大赛前期数据分析工具</h1>
-            <p>数据清洗、变量识别、可视化、相关性分析、模型推荐与统计建模</p>
-        </div>
-        <img
-            class="fursona-image"
-            src="data:image/png;base64,PLACEHOLDER"
-            alt="兽设抱着数"
-        >
-    </div>
-    """
-
-    header_html = header_html.replace(
-        "PLACEHOLDER",
-        fursona_base64,
-    )
-
-    st.markdown(
-        header_html,
-        unsafe_allow_html=True,
-    )
     
 with st.sidebar:
+    # ===== 背景音乐 BGM =====
+    st.sidebar.subheader("🎵 背景音乐")
+    bgm_path = Path(__file__).resolve().parent / "assets" / "bgm.mp3"
+    bgm_enabled = st.sidebar.checkbox("开启背景音乐", value=True)
+
+    if bgm_enabled:
+        try:
+            if bgm_path.exists():
+                bgm_bytes = bgm_path.read_bytes()
+                st.sidebar.audio(bgm_bytes, format="audio/mp3", autoplay=True)
+            else:
+                uploaded_bgm = st.sidebar.file_uploader(
+                    "上传背景音乐（mp3/wav/ogg）",
+                    type=["mp3", "wav", "ogg"],
+                    key="bgm_uploader",
+                )
+                if uploaded_bgm is not None:
+                    st.sidebar.audio(
+                        uploaded_bgm.getvalue(),
+                        format=uploaded_bgm.type,
+                        autoplay=True,
+                    )
+                else:
+                    st.sidebar.info(
+                        "未检测到背景音乐。\n"
+                        "可将 bgm.mp3 放入 assets 文件夹，或直接上传音乐文件。"
+                    )
+        except TypeError:
+            # 旧版 Streamlit 不支持 autoplay 参数时，退化为普通播放器
+            if bgm_path.exists():
+                st.sidebar.audio(bgm_path.read_bytes(), format="audio/mp3")
+            else:
+                uploaded_bgm = st.sidebar.file_uploader(
+                    "上传背景音乐（mp3/wav/ogg）",
+                    type=["mp3", "wav", "ogg"],
+                    key="bgm_uploader_old",
+                )
+                if uploaded_bgm is not None:
+                    st.sidebar.audio(uploaded_bgm.getvalue())
     st.title('功能导航')
     mode_options = [
         "数据分析",
@@ -2896,7 +2853,14 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
         uploaded_file.seek(0)
 
         if uploaded_file.name.lower().endswith(".csv"):
-            raw_df = pd.read_csv(uploaded_file)
+            try:
+                raw_df = pd.read_csv(uploaded_file, encoding='utf-8')
+            except UnicodeDecodeError:
+                uploaded_file.seek(0)
+                raw_df = pd.read_csv(uploaded_file, encoding='gbk')
+            except Exception:
+                uploaded_file.seek(0)
+                raw_df = pd.read_csv(uploaded_file, encoding='gb18030')
         else:
             raw_df = pd.read_excel(uploaded_file)
 
@@ -3263,24 +3227,6 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
         raw_df,
         variable_types,
     )
-
-    # 自动把被读取为文本的数字列转换为数值型
-    for col in typed_df.columns:
-        if col == target:
-            continue
-
-        # 分类变量即使使用数字编码，也不能自动当作连续变量处理
-        if variable_types.get(col) not in ["连续", "次数"]:
-            continue
-
-        converted = pd.to_numeric(
-            typed_df[col].astype(str).str.strip(),
-            errors="coerce",
-        )
-
-        if converted.notna().mean() >= 0.8:
-            typed_df[col] = converted
-
 
     before_missing_cells = int(
         typed_df.isna().sum().sum()
@@ -4301,60 +4247,69 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                             test_probability >= 0.5
                         ).astype(int)
 
-                        test_metrics = [
-                            "准确率",
-                            "平衡准确率",
-                            "精确率",
-                            "召回率",
-                            "F1值",
-                            "Log Loss",
-                        ]
+                        if len(np.unique(y_test)) < 2:
+                            st.warning("测试集中只有一种类别，仅给出准确率。")
+                            test_metrics = ["准确率"]
+                            test_values = [
+                                accuracy_score(
+                                    y_test.astype(int),
+                                    test_class,
+                                ),
+                            ]
+                        else:
+                            test_metrics = [
+                                "准确率",
+                                "平衡准确率",
+                                "精确率",
+                                "召回率",
+                                "F1值",
+                                "Log Loss",
+                            ]
 
-                        test_values = [
-                            accuracy_score(
-                                y_test.astype(int),
-                                test_class,
-                            ),
-                            balanced_accuracy_score(
-                                y_test.astype(int),
-                                test_class,
-                            ),
-                            precision_score(
-                                y_test.astype(int),
-                                test_class,
-                                zero_division=0,
-                            ),
-                            recall_score(
-                                y_test.astype(int),
-                                test_class,
-                                zero_division=0,
-                            ),
-                            f1_score(
-                                y_test.astype(int),
-                                test_class,
-                                zero_division=0,
-                            ),
-                            log_loss(
-                                y_test.astype(int),
-                                test_probability,
-                            ),
-                        ]
-
-                        if len(
-                            np.unique(
-                                y_test
-                            )
-                        ) == 2:
-                            test_metrics.append(
-                                "ROC-AUC"
-                            )
-                            test_values.append(
-                                roc_auc_score(
-                                    y_test,
+                            test_values = [
+                                accuracy_score(
+                                    y_test.astype(int),
+                                    test_class,
+                                ),
+                                balanced_accuracy_score(
+                                    y_test.astype(int),
+                                    test_class,
+                                ),
+                                precision_score(
+                                    y_test.astype(int),
+                                    test_class,
+                                    zero_division=0,
+                                ),
+                                recall_score(
+                                    y_test.astype(int),
+                                    test_class,
+                                    zero_division=0,
+                                ),
+                                f1_score(
+                                    y_test.astype(int),
+                                    test_class,
+                                    zero_division=0,
+                                ),
+                                log_loss(
+                                    y_test.astype(int),
                                     test_probability,
-                                )
-                            )
+                                ),
+                            ]
 
+                            if len(
+                                np.unique(
+                                    y_test
+                                )
+                            ) == 2:
+                                test_metrics.append(
+                                    "ROC-AUC"
+                                )
+                                test_values.append(
+                                    roc_auc_score(
+                                        y_test,
+                                        test_probability,
+                                    )
+                                )
                     elif stored_model_type == (
                         "多项Logistic回归"
                     ):
@@ -4366,29 +4321,38 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                             probability.argmax(axis=1)
                         )
 
-                        test_metrics = [
-                            "准确率",
-                            "平衡准确率",
-                            "宏平均F1",
-                        ]
+                        if len(np.unique(y_test)) < 2:
+                            st.warning("测试集中只有一种类别，仅给出准确率。")
+                            test_metrics = ["准确率"]
+                            test_values = [
+                                accuracy_score(
+                                    y_test.astype(int),
+                                    test_class,
+                                ),
+                            ]
+                        else:
+                            test_metrics = [
+                                "准确率",
+                                "平衡准确率",
+                                "宏平均F1",
+                            ]
 
-                        test_values = [
-                            accuracy_score(
-                                y_test.astype(int),
-                                test_class,
-                            ),
-                            balanced_accuracy_score(
-                                y_test.astype(int),
-                                test_class,
-                            ),
-                            f1_score(
-                                y_test.astype(int),
-                                test_class,
-                                average="macro",
-                                zero_division=0,
-                            ),
-                        ]
-
+                            test_values = [
+                                accuracy_score(
+                                    y_test.astype(int),
+                                    test_class,
+                                ),
+                                balanced_accuracy_score(
+                                    y_test.astype(int),
+                                    test_class,
+                                ),
+                                f1_score(
+                                    y_test.astype(int),
+                                    test_class,
+                                    average="macro",
+                                    zero_division=0,
+                                ),
+                            ]
                     else:
                         raw_test_prediction = np.asarray(
                             test_model.predict(X_test),
@@ -4707,6 +4671,97 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
         )
 
 
+
+    # ============================================================
+    # 二十二、综合报告导出
+    # ============================================================
+
+    st.subheader("📑 一键导出综合报告")
+
+    def _get_var(name):
+        """从当前作用域安全获取变量，避免未定义报错。"""
+        return globals().get(name)
+
+    def _add_section(sections, title, df):
+        if df is not None and hasattr(df, 'empty') and not df.empty:
+            sections.append((title, df))
+
+    report_sections = []
+    report_sections.append(("基本信息", f"赛题类型：{_get_var('problem_type') or '未填写'}"))
+    _add_section(report_sections, "数据清洗汇总", _get_var("cleaning_summary"))
+    _add_section(report_sections, "缺失值处理明细", _get_var("missing_detail_table"))
+    _add_section(report_sections, "异常值处理明细", _get_var("outlier_detail_table"))
+    _add_section(report_sections, "相关性分析", _get_var("corr_table"))
+    _add_section(report_sections, "VIF多重共线性诊断", _get_var("vif_table"))
+    _add_section(report_sections, "模型评价指标", _get_var("metric_table"))
+    _add_section(report_sections, "模型系数结果", _get_var("result_table"))
+
+    pred_df = _get_var("prediction_table")
+    if pred_df is not None and not pred_df.empty:
+        report_sections.append(("实际值预测值残差(前50行)", pred_df.head(50)))
+
+    _add_section(report_sections, "测试集评价指标", _get_var("test_metric_table"))
+    _add_section(report_sections, "线性模型诊断", _get_var("diagnostic_table"))
+    _add_section(report_sections, "二分类混淆矩阵", _get_var("cm_table"))
+
+    for var_name, title in [("assumptions_text", "模型假设"), ("paper_text", "论文表述草稿"), ("cleaning_text", "数据清洗表述")]:
+        text_val = _get_var(var_name)
+        if text_val:
+            report_sections.append((title, text_val))
+
+    if st.button("📥 生成综合报告 (Word)", key="export_report_button"):
+        try:
+            from docx import Document
+            from docx.shared import Pt
+            from docx.oxml.ns import qn
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+            doc = Document()
+            style = doc.styles['Normal']
+            style.font.name = 'Times New Roman'
+            style.font.size = Pt(10.5)
+            style.element.rPr.rFonts.set(qn('w:eastAsia'), '宋体')
+
+            title_para = doc.add_heading('数学建模前期数据分析综合报告', 0)
+            title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            doc.add_paragraph(f'生成时间：{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+
+            for section in report_sections:
+                title, content = section
+                doc.add_heading(str(title), level=2)
+                if isinstance(content, pd.DataFrame):
+                    if content.empty:
+                        doc.add_paragraph("（无数据）")
+                        continue
+                    table = doc.add_table(rows=content.shape[0] + 1, cols=content.shape[1])
+                    table.style = 'Table Grid'
+                    for j, col in enumerate(content.columns):
+                        table.cell(0, j).text = str(col)
+                    for i in range(content.shape[0]):
+                        for j in range(content.shape[1]):
+                            table.cell(i + 1, j).text = str(content.iloc[i, j])
+                else:
+                    doc.add_paragraph(str(content))
+
+            import io as _io
+            buffer = _io.BytesIO()
+            doc.save(buffer)
+            doc_bytes = buffer.getvalue()
+
+            st.download_button(
+                "⬇️ 下载综合报告.docx",
+                data=doc_bytes,
+                file_name="数学建模前期数据分析综合报告.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                key="download_report_button",
+            )
+            st.success("综合报告生成成功，请点击上方按钮下载。")
+        except ImportError:
+            st.error("缺少 python-docx 库，请先在终端执行：pip install python-docx")
+        except Exception as e:
+            st.error(f"生成报告失败：{e}")
+
+
     # ============================================================
     # 二十一、使用注意事项
     # ============================================================
@@ -4756,8 +4811,6 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
 
 
 else:  # 优化求解模块
-    import numpy as np
-    from scipy.optimize import linprog, milp, minimize, LinearConstraint, Bounds
 
     st.header("📊 优化问题求解器")
 
@@ -4770,7 +4823,14 @@ else:  # 优化求解模块
         uploaded_file = st.session_state.opt_uploaded_file
         uploaded_file.seek(0)
         if uploaded_file.name.endswith(".csv"):
-            opt_df = pd.read_csv(uploaded_file)
+            try:
+                opt_df = pd.read_csv(uploaded_file, encoding='utf-8')
+            except UnicodeDecodeError:
+                uploaded_file.seek(0)
+                opt_df = pd.read_csv(uploaded_file, encoding='gbk')
+            except Exception:
+                uploaded_file.seek(0)
+                opt_df = pd.read_csv(uploaded_file, encoding='gb18030')
         else:
             opt_df = pd.read_excel(uploaded_file)
     except Exception as e:
@@ -4803,6 +4863,14 @@ else:  # 优化求解模块
         st.warning("请至少选择一个决策变量列。")
         st.stop()
     n_vars = len(var_cols)
+    # 决策变量统计信息
+    st.write("**决策变量统计信息**")
+    try:
+        stats_df = opt_df[var_cols].describe().T.reset_index()
+        st.dataframe(stats_df, use_container_width=True)
+    except Exception:
+        pass
+
 
     current_var_signature = tuple(var_cols)
 
@@ -4944,46 +5012,47 @@ else:  # 优化求解模块
                 st.write("**最优解：**")
                 st.json({var_cols[i]: float(opt_x[i]) for i in range(n_vars)})
                 st.write(f"**最优值：** {opt_val:.6f}")
-
-                # 简单敏感性分析
-                st.subheader("影子价格近似")
-                for idx, constraint_item in enumerate(
-                    st.session_state.cons_list
-                ):
-                    coeffs = constraint_item["coeffs"]
-                    sign = constraint_item["sign"]
-                    rhs = constraint_item["rhs"]
-
-                    delta = 0.01 * max(abs(rhs), 1.0)
-                    # 重新求解扰动后问题
-                    t_A_ub, t_b_ub, t_A_eq, t_b_eq = [], [], [], []
-                    for j, constraint_j in enumerate(
+                if opt_type == "线性规划 (LP)":
+                
+                    # 简单敏感性分析f
+                    st.subheader("影子价格近似")
+                    for idx, constraint_item in enumerate(
                         st.session_state.cons_list
                     ):
-                        coeffs_j = constraint_j["coeffs"]
-                        sign_j = constraint_j["sign"]
-                        rhs_j = constraint_j["rhs"]
+                        coeffs = constraint_item["coeffs"]
+                        sign = constraint_item["sign"]
+                        rhs = constraint_item["rhs"]
 
-                        if j == idx:
-                            rhs_j += delta
-                        if sign_j == "<=":
-                            t_A_ub.append(coeffs_j); t_b_ub.append(rhs_j)
-                        elif sign_j == ">=":
-                            t_A_ub.append([-c for c in coeffs_j]); t_b_ub.append(-rhs_j)
-                        else:
-                            t_A_eq.append(coeffs_j); t_b_eq.append(rhs_j)
-                    try:
-                        t_A_ub = np.array(t_A_ub) if t_A_ub else None
-                        t_b_ub = np.array(t_b_ub) if t_b_ub else None
-                        t_A_eq = np.array(t_A_eq) if t_A_eq else None
-                        t_b_eq = np.array(t_b_eq) if t_b_eq else None
-                        res2 = linprog(c, A_ub=t_A_ub, b_ub=t_b_ub, A_eq=t_A_eq, b_eq=t_b_eq, bounds=bounds, method='highs')
-                        if res2.success:
-                            pval = -res2.fun if maximize else res2.fun
-                            shadow = (pval - opt_val) / delta
-                            st.write(f"约束 {idx+1}: 影子价格 ≈ {shadow:.6f}")
-                    except:
-                        pass
+                        delta = 0.01 * max(abs(rhs), 1.0)
+                        # 重新求解扰动后问题
+                        t_A_ub, t_b_ub, t_A_eq, t_b_eq = [], [], [], []
+                        for j, constraint_j in enumerate(
+                            st.session_state.cons_list
+                        ):
+                            coeffs_j = constraint_j["coeffs"]
+                            sign_j = constraint_j["sign"]
+                            rhs_j = constraint_j["rhs"]
+
+                            if j == idx:
+                                rhs_j += delta
+                            if sign_j == "<=":
+                                t_A_ub.append(coeffs_j); t_b_ub.append(rhs_j)
+                            elif sign_j == ">=":
+                                t_A_ub.append([-c for c in coeffs_j]); t_b_ub.append(-rhs_j)
+                            else:
+                                t_A_eq.append(coeffs_j); t_b_eq.append(rhs_j)
+                        try:
+                            t_A_ub = np.array(t_A_ub) if t_A_ub else None
+                            t_b_ub = np.array(t_b_ub) if t_b_ub else None
+                            t_A_eq = np.array(t_A_eq) if t_A_eq else None
+                            t_b_eq = np.array(t_b_eq) if t_b_eq else None
+                            res2 = linprog(c, A_ub=t_A_ub, b_ub=t_b_ub, A_eq=t_A_eq, b_eq=t_b_eq, bounds=bounds, method='highs')
+                            if res2.success:
+                                pval = -res2.fun if maximize else res2.fun
+                                shadow = (pval - opt_val) / delta
+                                st.write(f"约束 {idx+1}: 影子价格 ≈ {shadow:.6f}")
+                        except:
+                            pass
             else:
                 st.error(f"求解失败：{res.message}")
         except Exception as e:
