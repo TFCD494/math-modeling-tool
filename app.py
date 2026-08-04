@@ -14,6 +14,12 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 import streamlit as st
+
+st.set_page_config(
+    page_title="数学建模前期数据分析工具",
+    layout="wide",
+)
+
 import statsmodels.api as sm
 
 from scipy.stats import pearsonr, spearmanr, shapiro, probplot
@@ -55,17 +61,16 @@ import docx
 # 一、页面和全局设置
 # ============================================================
 
-warnings.filterwarnings("ignore")
+warnings.filterwarnings(
+    "ignore",
+    category=FutureWarning,
+)
 # 初始化所有可能用到的 session_state 变量
 if "opt_uploaded_file" not in st.session_state:
     st.session_state.opt_uploaded_file = None
 if "app_mode" not in st.session_state:
     st.session_state.app_mode = "数据分析"
     
-st.set_page_config(
-    page_title="数学建模前期数据分析工具",
-    layout="wide",
-)
 
 # ===== 页面背景图片 =====
 
@@ -251,7 +256,12 @@ def setup_chinese_font():
                 "noto-cjk/raw/main/Sans/OTF/"
                 "SimplifiedChinese/NotoSansCJKsc-Regular.otf"
             )
-            urllib.request.urlretrieve(url, font_path)
+            with urllib.request.urlopen(
+                url,
+                timeout=5,
+            ) as response:
+                with open(font_path, "wb") as font_file:
+                    font_file.write(response.read())
 
         if os.path.exists(font_path):
             fm.fontManager.addfont(font_path)
@@ -297,13 +307,20 @@ MODEL_STATE_KEYS = [
     "vif_table",
     "target_mapping",
     "model_signature",
+    "selected_model_type",
+    "analysis_signature",
 ]
 
 
 def clear_model_session_state():
-    """清除旧模型结果。"""
+    """清除旧模型结果和分析签名。"""
     for key in MODEL_STATE_KEYS:
         st.session_state.pop(key, None)
+
+    st.session_state.pop(
+        "analysis_signature",
+        None,
+    )
 
 
 def reset_model_if_signature_changed(signature):
@@ -369,21 +386,27 @@ def clean_column_name(name):
 
 
 def make_unique_columns(columns):
-    """清理并处理重复列名。"""
+    """清理列名，并保证最终列名全局唯一。"""
+    used = set()
     result = []
-    counter = {}
 
     for col in columns:
         base = clean_column_name(col)
-        counter[base] = counter.get(base, 0) + 1
 
-        if counter[base] == 1:
-            result.append(base)
-        else:
-            result.append(f"{base}_{counter[base]}")
+        if not base:
+            base = "未命名变量"
+
+        candidate = base
+        suffix = 2
+
+        while candidate in used:
+            candidate = f"{base}_{suffix}"
+            suffix += 1
+
+        used.add(candidate)
+        result.append(candidate)
 
     return result
-
 
 def dataframe_download(df, filename, key=None):
     """生成 CSV 下载按钮。"""
@@ -466,11 +489,27 @@ def extract_text_from_file(uploaded_file):
 
         if file_type == "docx":
             document = docx.Document(uploaded_file)
-            paragraphs = [
-                paragraph.text
+
+            text_parts = [
+                paragraph.text.strip()
                 for paragraph in document.paragraphs
+                if paragraph.text.strip()
             ]
-            return "\n".join(paragraphs).strip()
+
+            # 同时读取 Word 表格中的内容
+            for table in document.tables:
+                for row in table.rows:
+                    cells = [
+                        cell.text.strip()
+                        for cell in row.cells
+                    ]
+                    row_text = " | ".join(
+                        cell for cell in cells if cell
+                    )
+                    if row_text:
+                        text_parts.append(row_text)
+
+            return "\n".join(text_parts).strip()
 
         if file_type == "txt":
             raw = uploaded_file.read()
@@ -742,20 +781,55 @@ def try_parse_datetime(series):
     if pd.api.types.is_datetime64_any_dtype(series):
         return pd.to_datetime(series, errors="coerce")
 
-    if (
+    if not (
         series.dtype == "object"
         or pd.api.types.is_string_dtype(series)
     ):
-        parsed = pd.to_datetime(
-            series,
-            errors="coerce"
+        return None
+
+    non_missing = series.dropna()
+
+    if len(non_missing) == 0:
+        return None
+
+    text_values = non_missing.astype(str).str.strip()
+
+    date_keyword_pattern = (
+        r"(年|月|日|日期|时间|date|time|year|month|day)"
+    )
+
+    name_hint = False
+
+    if hasattr(series, "name") and series.name is not None:
+        name_hint = bool(
+            re.search(
+                date_keyword_pattern,
+                str(series.name),
+                flags=re.IGNORECASE,
+            )
         )
 
-        if parsed.notna().mean() >= 0.8:
-            return parsed
+    has_date_separator = text_values.str.contains(
+        r"[-/:年月日]",
+        regex=True,
+    ).mean() >= 0.6
+
+    if not name_hint and not has_date_separator:
+        return None
+
+    parsed = pd.to_datetime(
+        text_values,
+        errors="coerce",
+    )
+
+    if parsed.notna().mean() >= 0.8:
+        full_result = pd.to_datetime(
+            series,
+            errors="coerce",
+        )
+        return full_result
 
     return None
-
 
 def classify_variable(series):
     """自动识别变量类型。"""
@@ -1374,7 +1448,7 @@ MODEL_OPTIONS = [
     "多元线性回归",
     "Logit变换线性回归",
     "线性混合效应模型",
-    "比例型混合效应模型",
+    "Logit变换线性混合效应模型",
     "二项Logistic回归",
     "多项Logistic回归",
     "Poisson回归",
@@ -1459,7 +1533,7 @@ def detect_model_type(
 
         if in_unit_interval and repeated:
             return {
-                "model_type": "比例型混合效应模型",
+                "model_type": "Logit变换线性混合效应模型",
                 "reason": (
                     "因变量取值在0到1之间，且存在重复观测。"
                 ),
@@ -1575,7 +1649,7 @@ def validate_model_selection(
 
     elif model_type in [
         "线性混合效应模型",
-        "比例型混合效应模型",
+        "Logit变换线性混合效应模型",
     ]:
         if target_type not in ["连续", "次数"]:
             return False, (
@@ -1592,10 +1666,10 @@ def validate_model_selection(
                 "分组变量至少需要包含两个不同的组。"
             )
 
-        if model_type == "比例型混合效应模型":
+        if model_type == "Logit变换线性混合效应模型":
             if ((y_numeric < 0) | (y_numeric > 1)).any():
                 return False, (
-                    "比例型混合效应模型要求因变量取值在0到1之间。"
+                    "Logit变换线性混合效应模型要求因变量取值在0到1之间。"
                 )
 
     return True, ""
@@ -1610,6 +1684,8 @@ def logit_transform(y):
 
     eps = 1e-6
 
+    # 0和1会被截断到接近边界的位置，
+    # 因此使用该模型时应谨慎解释边界观测。
     values = values.clip(
         lower=eps,
         upper=1 - eps,
@@ -1699,10 +1775,10 @@ def fit_model(
             "model_type": model_type,
         }
 
-    if model_type == "比例型混合效应模型":
+    if model_type == "Logit变换线性混合效应模型":
         if groups is None:
             raise ValueError(
-                "比例型混合效应模型必须指定分组变量。"
+                "Logit变换线性混合效应模型必须指定分组变量。"
             )
 
         transformed_y = logit_transform(y)
@@ -2001,7 +2077,7 @@ def make_metric_table(fitted_result):
         "多元线性回归",
         "Logit变换线性回归",
         "线性混合效应模型",
-        "比例型混合效应模型",
+        "Logit变换线性混合效应模型",
     ]:
         rows.extend(
             [
@@ -2414,7 +2490,7 @@ def generate_assumptions(
             ]
         )
 
-    elif model_type == "比例型混合效应模型":
+    elif model_type == "Logit变换线性混合效应模型":
         assumptions.extend(
             [
                 "假设因变量为0到1之间的比例变量。",
@@ -2558,10 +2634,24 @@ def generate_assumptions(
     
 with st.sidebar:
     st.title('功能导航')
+    mode_options = [
+        "数据分析",
+        "优化求解",
+    ]
+
+    current_mode = st.session_state.get(
+        "app_mode",
+        "数据分析",
+    )
+
+    if current_mode not in mode_options:
+        current_mode = "数据分析"
+
     app_mode = st.radio(
-        '请选择功能模块',
-        ['数据分析', '优化求解'],
-        index=0
+        "请选择功能模块",
+        mode_options,
+        index=mode_options.index(current_mode),
+        key="app_mode_radio",
     )
     if app_mode != st.session_state.get('app_mode', '数据分析'):
         st.session_state.app_mode = app_mode
@@ -2585,10 +2675,18 @@ with st.sidebar:
             if st.session_state.get(
                 "last_problem_file_hash"
             ) != problem_file_hash:
-                st.session_state["problem_text"] = (
+                extracted_problem_text = (
                     extract_text_from_file(
                         uploaded_problem_file
                     )
+                )
+
+                st.session_state["problem_text"] = (
+                    extracted_problem_text
+                )
+
+                st.session_state["problem_text_area"] = (
+                    extracted_problem_text
                 )
                 st.session_state["last_problem_file"] = (
                     uploaded_problem_file.name
@@ -2597,12 +2695,11 @@ with st.sidebar:
                     problem_file_hash
                 )
 
+        if "problem_text_area" not in st.session_state:
+            st.session_state.problem_text_area = ""
+
         problem_text = st.text_area(
             "粘贴赛题原文或显示上传文件内容",
-            value=st.session_state.get(
-                "problem_text",
-                "",
-            ),
             height=160,
             placeholder=(
                 "上传文件后自动显示内容，也可以直接在此处粘贴。"
@@ -3757,11 +3854,32 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
             group_col=group_col,
         )
 
+        if len(y) < 5:
+            st.error(
+                "清洗后有效样本少于5条，无法进行可靠建模。"
+            )
+            st.stop()
+
         if len(y) <= X.shape[1]:
             st.error(
                 "有效样本数不大于模型参数数量，无法稳定建立模型。"
             )
             st.stop()
+
+        if variable_types.get(target) == "分类":
+            target_counts = pd.Series(y).value_counts()
+
+            if target_counts.min() < 2:
+                st.warning(
+                    "因变量存在样本数少于2的类别，"
+                    "分类模型和测试集评估可能不稳定。"
+                )
+
+        if groups is not None:
+            if groups.nunique() < 2:
+                st.warning(
+                    "分组数量过少，混合效应模型结果可能不稳定。"
+                )
 
         matrix_rank = np.linalg.matrix_rank(
             X.values
@@ -3869,7 +3987,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
             final_model_type
             in [
                 "线性混合效应模型",
-                "比例型混合效应模型",
+                "Logit变换线性混合效应模型",
             ]
             and group_col == "无"
         ):
@@ -4093,7 +4211,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
 
             elif stored_model_type in [
                 "线性混合效应模型",
-                "比例型混合效应模型",
+                "Logit变换线性混合效应模型",
             ]:
                 st.info(
                     "混合效应模型暂未采用普通随机划分，"
@@ -4686,38 +4804,74 @@ else:  # 优化求解模块
         st.stop()
     n_vars = len(var_cols)
 
-    # 目标函数系数：使用数据列的第一行作为默认系数，也可手动修改
+    current_var_signature = tuple(var_cols)
+
+    if st.session_state.get(
+        "constraint_var_signature"
+    ) != current_var_signature:
+        st.session_state.cons_list = []
+        st.session_state.constraint_var_signature = (
+            current_var_signature
+        )
+
+    # 目标函数系数由用户输入
     st.subheader("目标函数系数")
     obj_coeffs = []
     for c in var_cols:
-        # 安全读取第一个有效数值
-        num_series = pd.to_numeric(opt_df[c], errors='coerce').dropna()
-        default_val = float(num_series.iloc[0]) if len(num_series) > 0 else 0.0
-        coeff = st.number_input(f"系数 {c}", value=default_val, format="%.4f")
+        # 目标函数系数不应自动使用数据表第一行。
+        # 默认设置为0，由用户根据优化问题含义输入。
+        default_val = 0.0
+
+        coeff = st.number_input(
+            f"系数 {c}",
+            value=default_val,
+            format="%.4f",
+        )
         obj_coeffs.append(coeff)
     maximize = st.checkbox("最大化目标")
 
     # 约束条件
     st.subheader("约束条件")
     if "cons_list" not in st.session_state:
-        st.session_state.cons_list = []
+        st.session_state.cons_list = []   # 列表中每个元素都是字典
     with st.form("add_constraint"):
         coeff_str = st.text_input("系数（逗号分隔）", "1,1")
         sign = st.selectbox("关系", ["<=", "=", ">="])
         rhs = st.number_input("右侧常数", value=1.0)
-        if st.form_submit_button("添加约束"):
-            try:
-                coeffs = [float(x) for x in coeff_str.split(",")]
-                if len(coeffs) != n_vars:
-                    st.error(f"系数个数应为 {n_vars}")
-                else:
-                    st.session_state.cons_list.append((coeffs, sign, rhs))
-            except:
-                st.error("系数格式错误")
+
+        add_constraint_clicked = st.form_submit_button("添加约束")
+        try:
+            coeffs = [float(x) for x in coeff_str.split(",")]
+            if len(coeffs) != n_vars:
+                st.error(f"系数个数应为 {n_vars}")
+            else:
+                # 保存变量列名，并用字典存储
+                st.session_state.cons_list.append({
+                    "cols": var_cols.copy(),
+                    "coeffs": coeffs,
+                    "sign": sign,
+                    "rhs": rhs
+                })
+        except Exception as exc:
+            st.error(
+                f"系数格式错误：{exc}"
+            )
     # 显示已添加约束
-    for i, (coeffs, sign, rhs) in enumerate(st.session_state.cons_list):
-        expr = " + ".join([f"{c}*{var_cols[j]}" for j, c in enumerate(coeffs)])
-        st.write(f"约束 {i+1}: {expr} {sign} {rhs}")
+    for i, constraint_item in enumerate(
+        st.session_state.cons_list
+    ):
+        coeffs = constraint_item["coeffs"]
+        sign = constraint_item["sign"]
+        rhs = constraint_item["rhs"]
+
+        expr = " + ".join(
+            f"{coeffs[j]}*{var_cols[j]}"
+            for j in range(len(coeffs))
+        )
+
+        st.write(
+            f"约束 {i + 1}: {expr} {sign} {rhs}"
+        )
     if st.button("清空所有约束"):
         st.session_state.cons_list = []
 
@@ -4742,19 +4896,23 @@ else:  # 优化求解模块
         bounds = [(0, 1) for _ in range(n_vars)]
 
     # 求解
+    # 检查约束是否与当前变量列匹配
+    for cons in st.session_state.cons_list:
+        if cons["cols"] != var_cols:
+            st.error("您更改了决策变量列，请清空所有约束后重新添加！")
+            st.stop()
     if st.button("🚀 求解", type="primary"):
         A_ub, b_ub, A_eq, b_eq = [], [], [], []
-        for coeffs, sign, rhs in st.session_state.cons_list:
+        for cons in st.session_state.cons_list:
+            coeffs = cons["coeffs"]
+            sign = cons["sign"]
+            rhs = cons["rhs"]
             if sign == "<=":
-                A_ub.append(coeffs)
-                b_ub.append(rhs)
+                A_ub.append(coeffs); b_ub.append(rhs)
             elif sign == ">=":
-                A_ub.append([-c for c in coeffs])
-                b_ub.append(-rhs)
+                A_ub.append([-c for c in coeffs]); b_ub.append(-rhs)
             else:
-                A_eq.append(coeffs)
-                b_eq.append(rhs)
-
+                A_eq.append(coeffs); b_eq.append(rhs)
         c = np.array(obj_coeffs)
         if maximize:
             c = -c
@@ -4789,11 +4947,23 @@ else:  # 优化求解模块
 
                 # 简单敏感性分析
                 st.subheader("影子价格近似")
-                for idx, (coeffs, sign, rhs) in enumerate(st.session_state.cons_list):
+                for idx, constraint_item in enumerate(
+                    st.session_state.cons_list
+                ):
+                    coeffs = constraint_item["coeffs"]
+                    sign = constraint_item["sign"]
+                    rhs = constraint_item["rhs"]
+
                     delta = 0.01 * max(abs(rhs), 1.0)
                     # 重新求解扰动后问题
                     t_A_ub, t_b_ub, t_A_eq, t_b_eq = [], [], [], []
-                    for j, (coeffs_j, sign_j, rhs_j) in enumerate(st.session_state.cons_list):
+                    for j, constraint_j in enumerate(
+                        st.session_state.cons_list
+                    ):
+                        coeffs_j = constraint_j["coeffs"]
+                        sign_j = constraint_j["sign"]
+                        rhs_j = constraint_j["rhs"]
+
                         if j == idx:
                             rhs_j += delta
                         if sign_j == "<=":
