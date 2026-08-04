@@ -12,6 +12,37 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+
+# === PROJECT_CHINESE_FONT_START ===
+try:
+    from pathlib import Path as _FontPath
+    import matplotlib.font_manager as _font_manager
+    import matplotlib.pyplot as _font_pyplot
+
+    _font_dir = _FontPath(__file__).resolve().parent / "assets"
+    _font_file = _font_dir / "msyh.ttc"
+
+    if not _font_file.exists():
+        _font_file = _font_dir / "simsun.ttc"
+
+    if _font_file.exists():
+        _font_manager.fontManager.addfont(str(_font_file))
+        _font_prop = _font_manager.FontProperties(
+            fname=str(_font_file)
+        )
+        _font_name = _font_prop.get_name()
+
+        _font_pyplot.rcParams["font.family"] = [_font_name]
+        _font_pyplot.rcParams["font.sans-serif"] = [_font_name]
+        _font_pyplot.rcParams["axes.unicode_minus"] = False
+
+        print(f"已加载中文字体：{_font_name}")
+    else:
+        print("警告：项目内没有找到中文字体文件。")
+except Exception as _font_error:
+    print(f"中文字体加载失败：{_font_error}")
+# === PROJECT_CHINESE_FONT_END ===
+
 import matplotlib.font_manager as fm
 import streamlit as st
 
@@ -275,7 +306,7 @@ def setup_chinese_font():
     except Exception:
         pass
 
-    plt.rcParams["font.sans-serif"] = ["DejaVu Sans"]
+    plt.rcParams["font.sans-serif"] = [_font_name]
 
 
 setup_chinese_font()
