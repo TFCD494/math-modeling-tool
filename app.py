@@ -52,15 +52,18 @@ import docx
 # ============================================================
 
 warnings.filterwarnings("ignore")
-
+# 初始化所有可能用到的 session_state 变量
+if "opt_uploaded_file" not in st.session_state:
+    st.session_state.opt_uploaded_file = None
+if "app_mode" not in st.session_state:
+    st.session_state.app_mode = "数据分析"
+    
 st.set_page_config(
     page_title="数学建模前期数据分析工具",
     layout="wide",
 )
 
 # ===== 页面背景图片 =====
-import base64
-from pathlib import Path
 
 _bg_path = Path(__file__).resolve().parent / "assets" / "background.png"
 
@@ -739,8 +742,7 @@ def try_parse_datetime(series):
     ):
         parsed = pd.to_datetime(
             series,
-            errors="coerce",
-        utc=True,
+            errors="coerce"
         )
 
         if parsed.notna().mean() >= 0.8:
@@ -2552,215 +2554,222 @@ with st.sidebar:
     if app_mode != st.session_state.get('app_mode', '数据分析'):
         st.session_state.app_mode = app_mode
         st.rerun()
-    st.header("基本设置")
+    if app_mode == '数据分析':
+        st.header("基本设置")
 
-    st.subheader("赛题描述")
+        st.subheader("赛题描述")
 
-    uploaded_problem_file = st.file_uploader(
-        "上传赛题文件（PDF / Word / TXT）",
-        type=["pdf", "docx", "txt"],
-        key="problem_file_uploader",
-    )
-
-    if (
-        uploaded_problem_file is not None
-        and st.session_state.get(
-            "last_problem_file"
+        uploaded_problem_file = st.file_uploader(
+            "上传赛题文件（PDF / Word / TXT）",
+            type=["pdf", "docx", "txt"],
+            key="problem_file_uploader",
         )
-        != uploaded_problem_file.name
-    ):
-        st.session_state["problem_text"] = (
-            extract_text_from_file(
-                uploaded_problem_file
+
+        if (
+            uploaded_problem_file is not None
+            and st.session_state.get(
+                "last_problem_file"
             )
-        )
-        st.session_state["last_problem_file"] = (
-            uploaded_problem_file.name
-        )
-
-    problem_text = st.text_area(
-        "粘贴赛题原文或显示上传文件内容",
-        value=st.session_state.get(
-            "problem_text",
-            "",
-        ),
-        height=160,
-        placeholder=(
-            "上传文件后自动显示内容，也可以直接在此处粘贴。"
-        ),
-        key="problem_text_area",
-    )
-
-    st.session_state["problem_text"] = problem_text
-
-    if st.button("自动检测题型"):
-        result = multi_label_classify_problem_text(
-            problem_text
-        )
-
-        st.session_state["detect_result"] = result
-        st.session_state["problem_type"] = (
-            result["main_type"]
-        )
-
-    detect_result = st.session_state.get(
-        "detect_result",
-        {},
-    )
-
-    if detect_result:
-        st.success(
-            f"主类型：{detect_result['main_type']}"
-        )
-
-        detected_labels = detect_result.get(
-            "all_detected_labels",
-            [],
-        )
-
-        st.info(
-            "检测到的类型："
-            + (
-                "、".join(detected_labels)
-                if detected_labels
-                else "无"
-            )
-        )
-
-        if detect_result.get(
-            "sub_question_context"
+            != uploaded_problem_file.name
         ):
-            with st.expander(
-                "查看自动提取到的子问题片段"
+            st.session_state["problem_text"] = (
+                extract_text_from_file(
+                    uploaded_problem_file
+                )
+            )
+            st.session_state["last_problem_file"] = (
+                uploaded_problem_file.name
+            )
+
+        problem_text = st.text_area(
+            "粘贴赛题原文或显示上传文件内容",
+            value=st.session_state.get(
+                "problem_text",
+                "",
+            ),
+            height=160,
+            placeholder=(
+                "上传文件后自动显示内容，也可以直接在此处粘贴。"
+            ),
+            key="problem_text_area",
+        )
+
+        st.session_state["problem_text"] = problem_text
+
+        if st.button("自动检测题型"):
+            result = multi_label_classify_problem_text(
+                problem_text
+            )
+
+            st.session_state["detect_result"] = result
+            st.session_state["problem_type"] = (
+                result["main_type"]
+            )
+
+        detect_result = st.session_state.get(
+            "detect_result",
+            {},
+        )
+
+        if detect_result:
+            st.success(
+                f"主类型：{detect_result['main_type']}"
+            )
+
+            detected_labels = detect_result.get(
+                "all_detected_labels",
+                [],
+            )
+
+            st.info(
+                "检测到的类型："
+                + (
+                    "、".join(detected_labels)
+                    if detected_labels
+                    else "无"
+                )
+            )
+
+            if detect_result.get(
+                "sub_question_context"
             ):
-                for index, snippet in enumerate(
-                    detect_result[
-                        "sub_question_context"
-                    ],
-                    1,
+                with st.expander(
+                    "查看自动提取到的子问题片段"
                 ):
-                    st.markdown(
-                        f"**子问题 {index}：** "
-                        f"{snippet}……"
-                    )
+                    for index, snippet in enumerate(
+                        detect_result[
+                            "sub_question_context"
+                        ],
+                        1,
+                    ):
+                        st.markdown(
+                            f"**子问题 {index}：** "
+                            f"{snippet}……"
+                        )
 
-        with st.expander(
-            "查看题型识别分数和建模建议"
-        ):
-            score_table = pd.DataFrame(
-                {
-                    "题型类别": list(
-                        detect_result.get(
-                            "label_scores",
-                            {},
-                        ).keys()
-                    ),
-                    "综合得分": list(
-                        detect_result.get(
-                            "label_scores",
-                            {},
-                        ).values()
-                    ),
-                }
-            )
-
-            st.dataframe(
-                score_table,
-                use_container_width=True,
-            )
-
-            direction_map = {
-                "评价类": (
-                    "层次分析、TOPSIS、模糊综合评价、"
-                    "灰色关联分析、主成分分析"
-                ),
-                "预测类": (
-                    "多元回归、ARIMA、灰色预测、"
-                    "神经网络、时间序列分析"
-                ),
-                "优化类": (
-                    "线性规划、整数规划、0-1规划、"
-                    "遗传算法、模拟退火"
-                ),
-                "机理分析类": (
-                    "微分方程、动力学模型、Logistic模型、"
-                    "SIR模型、稳定性分析"
-                ),
-                "分类类": (
-                    "Logistic回归、决策树、随机森林、"
-                    "SVM、聚类分析"
-                ),
-            }
-
-            for label in detected_labels:
-                st.write(
-                    f"**{label}：** "
-                    f"{direction_map.get(label, '根据题目背景确定')}"
+            with st.expander(
+                "查看题型识别分数和建模建议"
+            ):
+                score_table = pd.DataFrame(
+                    {
+                        "题型类别": list(
+                            detect_result.get(
+                                "label_scores",
+                                {},
+                            ).keys()
+                        ),
+                        "综合得分": list(
+                            detect_result.get(
+                                "label_scores",
+                                {},
+                            ).values()
+                        ),
+                    }
                 )
 
-    problem_type = st.text_input(
-        "赛题类型",
-        value=st.session_state.get(
-            "problem_type",
-            "",
-        ),
-        placeholder="例如：预测类、评价类、优化类",
-    )
+                st.dataframe(
+                    score_table,
+                    use_container_width=True,
+                )
 
-    uploaded_file = st.file_uploader(
-        "上传数据表",
-        type=["csv", "xlsx", "xls"],
-        key="data_file_uploader",
-    )
+                direction_map = {
+                    "评价类": (
+                        "层次分析、TOPSIS、模糊综合评价、"
+                        "灰色关联分析、主成分分析"
+                    ),
+                    "预测类": (
+                        "多元回归、ARIMA、灰色预测、"
+                        "神经网络、时间序列分析"
+                    ),
+                    "优化类": (
+                        "线性规划、整数规划、0-1规划、"
+                        "遗传算法、模拟退火"
+                    ),
+                    "机理分析类": (
+                        "微分方程、动力学模型、Logistic模型、"
+                        "SIR模型、稳定性分析"
+                    ),
+                    "分类类": (
+                        "Logistic回归、决策树、随机森林、"
+                        "SVM、聚类分析"
+                    ),
+                }
 
-    st.subheader("缺失值处理")
+                for label in detected_labels:
+                    st.write(
+                        f"**{label}：** "
+                        f"{direction_map.get(label, '根据题目背景确定')}"
+                    )
 
-    missing_method = st.selectbox(
-        "处理方式",
-        [
-            "分类型处理",
-            "删除含缺失值的行",
-        ],
-    )
+        problem_type = st.text_input(
+            "赛题类型",
+            value=st.session_state.get(
+                "problem_type",
+                "",
+            ),
+            placeholder="例如：预测类、评价类、优化类",
+        )
 
-    st.subheader("异常值处理")
+        uploaded_file = st.file_uploader(
+            "上传数据表",
+            type=["csv", "xlsx", "xls"],
+            key="data_file_uploader",
+        )
 
-    outlier_method = st.selectbox(
-        "识别方法",
-        [
-            "不处理",
-            "3σ",
-            "IQR",
-        ],
-    )
+        st.subheader("缺失值处理")
 
-    outlier_action = st.selectbox(
-        "异常值处理动作",
-        [
-            "仅标记，不删除",
-            "删除异常行",
-        ],
-    )
+        missing_method = st.selectbox(
+            "处理方式",
+            [
+                "分类型处理",
+                "删除含缺失值的行",
+            ],
+        )
 
-    robust_se = st.checkbox(
-        "线性回归使用HC3稳健标准误",
-        value=True,
-    )
+        st.subheader("异常值处理")
 
-    use_test_set = st.checkbox(
-        "进行训练集/测试集评估",
-        value=True,
-    )
+        outlier_method = st.selectbox(
+            "识别方法",
+            [
+                "不处理",
+                "3σ",
+                "IQR",
+            ],
+        )
 
-    test_size = st.slider(
-        "测试集比例",
-        min_value=0.1,
-        max_value=0.4,
-        value=0.2,
-        step=0.05,
-    )
+        outlier_action = st.selectbox(
+            "异常值处理动作",
+            [
+                "仅标记，不删除",
+                "删除异常行",
+            ],
+        )
+
+        robust_se = st.checkbox(
+            "线性回归使用HC3稳健标准误",
+            value=True,
+        )
+
+        use_test_set = st.checkbox(
+            "进行训练集/测试集评估",
+            value=True,
+        )
+
+        test_size = st.slider(
+            "测试集比例",
+            min_value=0.1,
+            max_value=0.4,
+            value=0.2,
+            step=0.05,
+        )
 
 
+
+    else:  # 优化求解模式
+        st.header('优化设置')
+        opt_upload = st.file_uploader('上传数据表（优化用）', type=['csv', 'xlsx'], key='opt_data_upload')
+        if opt_upload is not None:
+            st.session_state.opt_uploaded_file = opt_upload
 if st.session_state.get('app_mode', '数据分析') == '数据分析':
     # ============================================================
     # 十二、读取数据
@@ -3144,6 +3153,10 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
         if col == target:
             continue
 
+        # 分类变量即使使用数字编码，也不能自动当作连续变量处理
+        if variable_types.get(col) not in ["连续", "次数"]:
+            continue
+
         converted = pd.to_numeric(
             typed_df[col].astype(str).str.strip(),
             errors="coerce",
@@ -3237,8 +3250,6 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
     if group_col != "无":
         used_columns.append(group_col)
 
-    if len(all_columns) > 0:
-        used_columns.append(all_columns[0])
 
     used_columns = list(dict.fromkeys(used_columns))
 
@@ -4582,11 +4593,6 @@ else:  # 优化求解模块
 
     st.header("📊 优化问题求解器")
 
-    if "opt_uploaded_file" not in st.session_state:
-        st.session_state.opt_uploaded_file = None
-    opt_upload = st.sidebar.file_uploader("上传数据表（优化用）", type=["csv", "xlsx"], key="opt_data_upload")
-    if opt_upload is not None:
-        st.session_state.opt_uploaded_file = opt_upload
 
     if st.session_state.opt_uploaded_file is None:
         st.info("请先在侧边栏上传数据表，然后使用优化求解功能。")
@@ -4682,7 +4688,8 @@ else:  # 优化求解模块
         int_vars = st.multiselect("整数变量", var_cols)
         integrality = [1 if col in int_vars else 0 for col in var_cols]
     if opt_type == "0-1 规划":
-        integrality = [2] * n_vars
+        integrality = [1] * n_vars
+        bounds = [(0, 1) for _ in range(n_vars)]
 
     # 求解
     if st.button("🚀 求解", type="primary"):
@@ -4709,7 +4716,7 @@ else:  # 优化求解模块
         b_eq = np.array(b_eq) if b_eq else None
 
         try:
-            if integrality and any(i > 0 for i in integrality):
+            if integrality is not None and any(integrality):
                 from scipy.optimize import milp, LinearConstraint, Bounds
                 cons = []
                 if A_ub is not None:
