@@ -4,6 +4,7 @@ import base64
 import os
 import re
 import warnings
+import hashlib
 import urllib.request
 from datetime import datetime
 
@@ -16,7 +17,10 @@ import streamlit as st
 import statsmodels.api as sm
 
 from scipy.stats import pearsonr, spearmanr, shapiro, probplot
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import (
+    train_test_split,
+    GroupShuffleSplit,
+)
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.metrics import (
@@ -315,6 +319,7 @@ def reset_model_if_signature_changed(signature):
 
 def build_analysis_signature(
     file_name,
+    file_hash,
     target,
     predictors,
     variable_types,
@@ -329,6 +334,7 @@ def build_analysis_signature(
     """根据当前分析设置生成唯一签名。"""
     signature_data = {
         "file_name": file_name,
+        "file_hash": file_hash,
         "target": target,
         "predictors": sorted(predictors),
         "variable_types": variable_types,
@@ -1031,9 +1037,12 @@ def detect_outliers(
                     index=result.index,
                 )
             else:
-                mask = ~values.between(
-                    mean_value - 3 * std_value,
-                    mean_value + 3 * std_value,
+                mask = (
+                    ~values.between(
+                        mean_value - 3 * std_value,
+                        mean_value + 3 * std_value,
+                    )
+                    & values.notna()
                 )
 
         elif method == "IQR":
@@ -1050,9 +1059,12 @@ def detect_outliers(
                 lower = q1 - 1.5 * iqr
                 upper = q3 + 1.5 * iqr
 
-                mask = ~values.between(
-                    lower,
-                    upper,
+                mask = (
+                    ~values.between(
+                        lower,
+                        upper,
+                    )
+                    & values.notna()
                 )
 
         else:
@@ -2565,21 +2577,25 @@ with st.sidebar:
             key="problem_file_uploader",
         )
 
-        if (
-            uploaded_problem_file is not None
-            and st.session_state.get(
-                "last_problem_file"
-            )
-            != uploaded_problem_file.name
-        ):
-            st.session_state["problem_text"] = (
-                extract_text_from_file(
-                    uploaded_problem_file
+        if uploaded_problem_file is not None:
+            problem_file_hash = hashlib.sha256(
+                uploaded_problem_file.getvalue()
+            ).hexdigest()
+
+            if st.session_state.get(
+                "last_problem_file_hash"
+            ) != problem_file_hash:
+                st.session_state["problem_text"] = (
+                    extract_text_from_file(
+                        uploaded_problem_file
+                    )
                 )
-            )
-            st.session_state["last_problem_file"] = (
-                uploaded_problem_file.name
-            )
+                st.session_state["last_problem_file"] = (
+                    uploaded_problem_file.name
+                )
+                st.session_state["last_problem_file_hash"] = (
+                    problem_file_hash
+                )
 
         problem_text = st.text_area(
             "粘贴赛题原文或显示上传文件内容",
@@ -3035,6 +3051,9 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
 
     current_signature = build_analysis_signature(
         file_name=uploaded_file.name,
+        file_hash=hashlib.sha256(
+            uploaded_file.getvalue()
+        ).hexdigest(),
         target=target,
         predictors=predictors,
         variable_types=variable_types,
@@ -3155,20 +3174,6 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
 
         # 分类变量即使使用数字编码，也不能自动当作连续变量处理
         if variable_types.get(col) not in ["连续", "次数"]:
-            continue
-
-        converted = pd.to_numeric(
-            typed_df[col].astype(str).str.strip(),
-            errors="coerce",
-        )
-
-        if converted.notna().mean() >= 0.8:
-            typed_df[col] = converted
-
-
-    # 自动修正被读取为文本的数字列
-    for col in typed_df.columns:
-        if col == target:
             continue
 
         converted = pd.to_numeric(
@@ -4104,13 +4109,42 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
 
                     indices = np.arange(len(y))
 
-                    train_index, test_index = (
-                        train_test_split(
-                            indices,
+                    has_groups = (
+                        groups is not None
+                        and groups.nunique() < len(groups)
+                    )
+
+                    if has_groups:
+                        splitter = GroupShuffleSplit(
+                            n_splits=1,
                             test_size=test_size,
                             random_state=42,
                         )
-                    )
+
+                        train_index, test_index = next(
+                            splitter.split(
+                                X,
+                                y,
+                                groups=groups,
+                            )
+                        )
+                    else:
+                        stratify_value = None
+
+                        if stored_model_type in [
+                            "二项Logistic回归",
+                            "多项Logistic回归",
+                        ]:
+                            stratify_value = y
+
+                        train_index, test_index = (
+                            train_test_split(
+                                indices,
+                                test_size=test_size,
+                                random_state=42,
+                                stratify=stratify_value,
+                            )
+                        )
 
                     y_train = y.iloc[train_index]
                     y_test = y.iloc[test_index]
@@ -4118,10 +4152,17 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                     X_train = X.iloc[train_index]
                     X_test = X.iloc[test_index]
 
+                    test_groups = None
+
+                    if has_groups:
+                        test_groups = groups.iloc[
+                            train_index
+                        ].reset_index(drop=True)
+
                     test_model_result = fit_model(
-                        y_train,
-                        X_train,
-                        None,
+                        y_train.reset_index(drop=True),
+                        X_train.reset_index(drop=True),
+                        test_groups,
                         stored_model_type,
                         robust_se=robust_se,
                     )
@@ -4231,10 +4272,19 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                         ]
 
                     else:
-                        test_prediction = np.asarray(
+                        raw_test_prediction = np.asarray(
                             test_model.predict(X_test),
                             dtype=float,
                         )
+
+                        # Logit模型预测值原本位于Logit尺度，
+                        # 必须还原到0到1的原始比例尺度。
+                        if stored_model_type == "Logit变换线性回归":
+                            test_prediction = inverse_logit(
+                                raw_test_prediction
+                            )
+                        else:
+                            test_prediction = raw_test_prediction
 
                         test_metrics = [
                             "RMSE",
