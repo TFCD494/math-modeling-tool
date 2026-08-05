@@ -643,6 +643,18 @@ def render_mission_checklist(step_index):
     """侧边栏任务清单：手动勾选与自动进度互通。"""
     st.markdown("### ✅ 我的任务清单")
 
+    # 修复：Streamlit 不允许在 widget 实例化后直接修改其 session_state 值。
+    # 点击“同步”按钮时只置位一个非 widget 标志并 rerun；
+    # 这里在所有 checkbox 创建【之前】检查该标志并预置 widget key，
+    # 此时 widget 尚未实例化，赋值合法（官方推荐的“按钮改变其他 widget”模式）。
+    if st.session_state.pop("guide_sync_triggered", False):
+        for index, step in enumerate(GUIDE_STEPS, start=1):
+            st.session_state[
+                f"check_guide_{step['key']}"
+            ] = index < step_index
+
+        st.rerun()
+
     for index, step in enumerate(GUIDE_STEPS, start=1):
         st.checkbox(
             step["title"],
@@ -663,11 +675,7 @@ def render_mission_checklist(step_index):
         "🔄 按当前自动进度同步勾选",
         key="sync_guide_button",
     ):
-        for index, step in enumerate(GUIDE_STEPS, start=1):
-            st.session_state[
-                f"check_guide_{step['key']}"
-            ] = index < step_index
-
+        st.session_state["guide_sync_triggered"] = True
         st.rerun()
 
 
