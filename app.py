@@ -3,6 +3,7 @@ from pathlib import Path
 import base64
 import os
 import re
+import ast
 import warnings
 import hashlib
 import urllib.request
@@ -13,35 +14,7 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 
-# === PROJECT_CHINESE_FONT_START ===
-try:
-    from pathlib import Path as _FontPath
-    import matplotlib.font_manager as _font_manager
-    import matplotlib.pyplot as _font_pyplot
-
-    _font_dir = _FontPath(__file__).resolve().parent / "assets"
-    _font_file = _font_dir / "msyh.ttc"
-
-    if not _font_file.exists():
-        _font_file = _font_dir / "simsun.ttc"
-
-    if _font_file.exists():
-        _font_manager.fontManager.addfont(str(_font_file))
-        _font_prop = _font_manager.FontProperties(
-            fname=str(_font_file)
-        )
-        _font_name = _font_prop.get_name()
-
-        _font_pyplot.rcParams["font.family"] = [_font_name]
-        _font_pyplot.rcParams["font.sans-serif"] = [_font_name]
-        _font_pyplot.rcParams["axes.unicode_minus"] = False
-
-        print(f"已加载中文字体：{_font_name}")
-    else:
-        print("警告：项目内没有找到中文字体文件。")
-except Exception as _font_error:
-    print(f"中文字体加载失败：{_font_error}")
-# === PROJECT_CHINESE_FONT_END ===
+# === 中文字体统一由 setup_chinese_font() 管理（见下文），此处不再单独加载 ===
 
 import matplotlib.font_manager as fm
 import streamlit as st
@@ -93,10 +66,16 @@ import docx
 # 一、页面和全局设置
 # ============================================================
 
-warnings.filterwarnings(
-    "ignore",
-    category=FutureWarning,
-)
+# 仅过滤统计库已知的、不影响结果的消息噪音（避免完全隐藏未来变更提示）
+for _warning_category, _warning_message in [
+    (FutureWarning, "is_sparse is deprecated"),
+    (FutureWarning, "use_inf_as_na"),
+]:
+    warnings.filterwarnings(
+        "ignore",
+        category=_warning_category,
+        message=_warning_message,
+    )
 # 初始化所有可能用到的 session_state 变量
 if "opt_uploaded_file" not in st.session_state:
     st.session_state.opt_uploaded_file = None
@@ -152,7 +131,10 @@ if _bg_path.exists():
         unsafe_allow_html=True,
     )
 else:
-    st.error(f"找不到背景图片：{_bg_path}")
+    st.info(
+        "未找到 assets/background.png，已使用默认背景。"
+        "如需自定义背景，请将图片放入 assets 文件夹。"
+    )
 
 # ===== 页面背景图片结束 =====
 
@@ -214,7 +196,10 @@ with _title_col_image:
     if _fursona_file.exists():
         st.image(str(_fursona_file), width=220)
     else:
-        st.error(f"找不到图片：{_fursona_file}")
+        st.caption(
+            "未找到 assets/fursona_shu.png，标题图片已隐藏。"
+            "可自行放入图片开启。"
+        )
 
 with _title_col_text:
     st.markdown(
@@ -228,13 +213,6 @@ with _title_col_text:
 
 # ===== 页面标题结束 =====
 
-
-
-
-
-
-
-
 sns.set_theme(style="whitegrid")
 
 plt.rcParams["axes.unicode_minus"] = False
@@ -246,9 +224,25 @@ plt.rcParams["axes.unicode_minus"] = False
 
 def setup_chinese_font():
     """
-    尝试配置中文字体。
-    如果网络字体下载失败，也不会影响主程序运行。
+    尝试配置中文字体（单一入口）。
+    优先级：项目内 assets 字体文件 > 系统已安装字体 > 联网下载 Noto Sans CJK。
+    任何一步失败都不会影响主程序运行。
     """
+    # 1) 优先使用项目内字体文件
+    for font_file_name in ["msyh.ttc", "simsun.ttc", "NotoSansCJKsc-Regular.otf"]:
+        font_path = Path(__file__).resolve().parent / "assets" / font_file_name
+        if font_path.exists():
+            try:
+                fm.fontManager.addfont(str(font_path))
+                font_prop = fm.FontProperties(fname=str(font_path))
+                font_name = font_prop.get_name()
+                plt.rcParams["font.sans-serif"] = [font_name, "DejaVu Sans"]
+                plt.rcParams["axes.unicode_minus"] = False
+                return
+            except Exception:
+                continue
+
+    # 2) 使用系统已安装字体
     font_candidates = [
         "WenQuanYi Zen Hei",
         "Noto Sans CJK SC",
@@ -270,9 +264,10 @@ def setup_chinese_font():
 
     if selected_font is not None:
         plt.rcParams["font.sans-serif"] = [selected_font]
+        plt.rcParams["axes.unicode_minus"] = False
         return
 
-    # 尝试下载 Noto Sans CJK 中文字体
+    # 3) 最后才尝试下载 Noto Sans CJK 中文字体
     try:
         font_dir = os.path.expanduser("~/.cache/matplotlib/fonts")
         os.makedirs(font_dir, exist_ok=True)
@@ -322,12 +317,15 @@ MODEL_STATE_KEYS = [
     "fitted_model",
     "final_model_type",
     "model_meta",
-    "X_for_assumption",
     "vif_table",
     "target_mapping",
     "model_signature",
     "selected_model_type",
     "analysis_signature",
+    "compare_df",
+    "compare_success",
+    "new_prediction_df",
+    "new_prediction_notes",
 ]
 
 
@@ -373,7 +371,10 @@ def build_analysis_signature(
         "file_hash": file_hash,
         "target": target,
         "predictors": sorted(predictors),
-        "variable_types": variable_types,
+        # 按列名排序后再参与签名，避免用户调整变量顺序触发无谓的模型重置
+        "variable_types": dict(
+            sorted(variable_types.items(), key=lambda item: item[0])
+        ),
         "group_col": group_col,
         "missing_method": missing_method,
         "outlier_method": outlier_method,
@@ -449,6 +450,192 @@ def dataframe_download(df, filename, key=None):
         mime="text/csv",
         key=download_key,
     )
+
+
+# ============================================================
+# 四·补充、UI 兼容与图表管理 helper
+# ============================================================
+
+def _st_dataframe(df, *args, **kwargs):
+    """
+    兼容新旧版 Streamlit 的表格展示。
+    新版用 width="stretch"，旧版用 use_container_width=True。
+    """
+    kwargs.pop("use_container_width", None)
+
+    try:
+        return st.dataframe(df, *args, width="stretch", **kwargs)
+    except TypeError:
+        return st.dataframe(df, *args, use_container_width=True, **kwargs)
+
+
+# 收集本会话生成的所有图表，供综合报告导出时嵌入 Word
+_REPORT_FIGURES = []
+
+
+def show_fig(fig, name=None):
+    """
+    展示 matplotlib 图表并附带“下载 PNG”按钮，同时登记到报告图集。
+    """
+    import io as _io
+
+    st.pyplot(fig)
+
+    if name is None:
+        name = f"chart_{len(_REPORT_FIGURES) + 1}"
+
+    try:
+        buffer = _io.BytesIO()
+        fig.savefig(
+            buffer,
+            format="png",
+            dpi=150,
+            bbox_inches="tight",
+        )
+        st.download_button(
+            "⬇️ 下载此图 PNG",
+            data=buffer.getvalue(),
+            file_name=f"{name}.png",
+            mime="image/png",
+            key=f"dl_fig_{name}",
+        )
+    except Exception:
+        pass
+
+    _REPORT_FIGURES.append(fig)
+
+    plt.close(fig)
+
+
+# ============================================================
+# 四·补充、新手引导系统
+# ============================================================
+
+GUIDE_STEPS = [
+    {
+        "key": "problem",
+        "title": "① 上传赛题（可选）",
+        "desc": "上传 PDF/Word/TXT 赛题文件，或直接粘贴赛题原文，点击“自动检测题型”。",
+    },
+    {
+        "key": "data",
+        "title": "② 上传数据表",
+        "desc": "上传 CSV / Excel 数据表。没有现成数据？点“下载示例数据”立刻体验全流程。",
+    },
+    {
+        "key": "vars",
+        "title": "③ 选择因变量与自变量",
+        "desc": "因变量是你要预测/解释的结果（如销量、评分），自变量是可能影响它的因素。",
+    },
+    {
+        "key": "types",
+        "title": "④ 确认变量类型",
+        "desc": "程序自动识别类型，请按变量真实含义确认：连续（数值）、分类（类别）、时间、次数（计数）。",
+    },
+    {
+        "key": "clean",
+        "title": "⑤ 数据清洗",
+        "desc": "处理缺失值与异常值。左侧可切换“分类型处理”或“删除含缺失值的行”。",
+    },
+    {
+        "key": "model",
+        "title": "⑥ 建模与诊断",
+        "desc": "程序自动推荐模型，选择后点击“开始拟合最终模型”，查看指标、系数和诊断图。",
+    },
+    {
+        "key": "adv",
+        "title": "⑦ 高级分析（可选）",
+        "desc": "熵权TOPSIS、灰色预测、ARIMA、聚类、PCA、随机森林等，按赛题类型选用。",
+    },
+    {
+        "key": "report",
+        "title": "⑧ 导出报告",
+        "desc": "一键导出 Word 综合报告，论文表述草稿可直接复制进论文。",
+    },
+]
+
+
+def make_sample_data_csv():
+    """
+    生成一份带缺失值、异常值、分类变量、计数变量和日期的新手示例数据，
+    覆盖本工具几乎所有功能点。
+    """
+    rng = np.random.default_rng(2026)
+    n = 120
+
+    data = {
+        "城市": rng.choice(["北京", "上海", "广州", "深圳", "成都"], n),
+        "客流量": np.round(rng.normal(500, 120, n), 1),
+        "广告费": np.round(rng.normal(30, 10, n), 2),
+        "促销次数": rng.integers(0, 8, n),
+        "门店面积": np.round(rng.normal(120, 40, n), 1),
+        "开业天数": rng.integers(30, 400, n),
+    }
+
+    df = pd.DataFrame(data)
+
+    # 制造几个缺失值（先转 float 再赋 NaN，避免整型列报错）
+    for col in ["客流量", "广告费", "促销次数"]:
+        idx = rng.choice(n, 5, replace=False)
+        df[col] = df[col].astype("float64")
+        df.loc[idx, col] = np.nan
+
+    # 制造两个明显异常值
+    df.loc[0, "客流量"] = 9500.0
+    df.loc[1, "广告费"] = 300.0
+
+    return df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+
+
+def render_guide_panel(step_index):
+    """
+    在侧边栏渲染新手引导面板：
+    step_index 表示当前已进行到第几步（从 1 开始），0 表示尚未开始。
+    """
+    st.markdown("---")
+    st.markdown("### 🧭 新手使用向导")
+
+    for i, step in enumerate(GUIDE_STEPS, start=1):
+        if i < step_index:
+            st.markdown(f"✅ **{step['title']}**")
+        elif i == step_index:
+            st.markdown(f"👉 **{step['title']}**")
+        else:
+            st.markdown(f"⭕ {step['title']}")
+
+    current = GUIDE_STEPS[min(max(step_index, 1), 8) - 1]
+
+    with st.expander("💡 当前这一步怎么做？", expanded=step_index > 0):
+        st.markdown(current["desc"])
+
+    st.markdown(
+        "**没有现成数据？** 点击下方按钮下载一份示例数据，"
+        "可以直接用来体验全部功能。"
+    )
+
+    sample_bytes = make_sample_data_csv()
+
+    st.download_button(
+        "📥 下载示例数据（CSV）",
+        data=sample_bytes,
+        file_name="示例数据.csv",
+        mime="text/csv",
+        key="download_sample_data_guide",
+    )
+
+
+# ===== 新手进度横幅（渲染在标题之后、主流程之前） =====
+
+_guide_step_now = st.session_state.get("guide_step", 0)
+
+if 0 < _guide_step_now <= len(GUIDE_STEPS):
+    _current_step = GUIDE_STEPS[_guide_step_now - 1]
+    st.info(
+        f"🧭 当前进度：第 {_guide_step_now}/8 步 —— "
+        f"{_current_step['title']}"
+    )
+
+# ===== 新手进度横幅结束 =====
 
 
 def safe_numeric(series):
@@ -1325,6 +1512,7 @@ def build_model_data(
 
     target_mapping = None
     target_type = variable_types[target]
+    dummy_info = {}
 
     if target_type in ["连续", "次数"]:
         selected[target] = pd.to_numeric(
@@ -1383,6 +1571,16 @@ def build_model_data(
             ).dt.total_seconds() / 86400
 
         elif var_type == "分类":
+            categories = sorted(
+                selected[col].dropna().unique().tolist()
+            )
+
+            if categories:
+                dummy_info[col] = {
+                    "原始类别": categories,
+                    "参照类别（被删除）": categories[0],
+                }
+
             selected[col] = selected[col].astype(
                 "string"
             )
@@ -1453,6 +1651,7 @@ def build_model_data(
         "n_rows": len(y),
         "n_features": X.shape[1],
         "constant_columns": constant_columns,
+        "dummy_info": dummy_info,
     }
 
     return (
@@ -1923,6 +2122,252 @@ def fit_model(
 
 
 # ============================================================
+# 九·补充、新数据预测与多模型对比
+# ============================================================
+
+def prepare_new_data(
+    new_df,
+    predictors,
+    variable_types,
+    training_feature_names,
+    dummy_info,
+):
+    """
+    将新数据按训练时的规则预处理，并对齐训练特征列。
+
+    返回 (X_new, 被删除的行数, 说明文本列表)。
+    """
+    notes = []
+    X_new = new_df[list(predictors)].copy()
+
+    for col in predictors:
+        var_type = variable_types.get(col, "连续")
+
+        if var_type in ["连续", "次数"]:
+            X_new[col] = pd.to_numeric(
+                X_new[col],
+                errors="coerce",
+            )
+        elif var_type == "时间":
+            dates = pd.to_datetime(
+                X_new[col],
+                errors="coerce",
+            )
+            X_new[col] = (
+                dates - pd.Timestamp("1970-01-01")
+            ).dt.total_seconds() / 86400
+        elif var_type == "分类":
+            X_new[col] = X_new[col].astype("string")
+
+    # 缺失值处理：连续列用均值填补，分类列用众数填补
+    n_dropped = 0
+
+    for col in predictors:
+        var_type = variable_types.get(col, "连续")
+
+        if var_type in ["连续", "次数"]:
+            median_value = X_new[col].median()
+
+            if pd.isna(median_value):
+                n_dropped += int(X_new[col].isna().sum())
+                X_new = X_new.dropna(subset=[col])
+            else:
+                filled = X_new[col].isna().sum()
+                X_new[col] = X_new[col].fillna(median_value)
+                if filled:
+                    notes.append(f"变量「{col}」缺失 {filled} 个值，已用中位数填补。")
+        elif var_type == "分类":
+            mode_values = X_new[col].mode(dropna=True)
+
+            if len(mode_values) == 0:
+                n_dropped += int(X_new[col].isna().sum())
+                X_new = X_new.dropna(subset=[col])
+            else:
+                filled = X_new[col].isna().sum()
+                X_new[col] = X_new[col].fillna(mode_values.iloc[0])
+                if filled:
+                    notes.append(f"变量「{col}」缺失 {filled} 个值，已用众数填补。")
+
+    # 哑变量编码（与训练保持一致：drop_first）
+    X_new = pd.get_dummies(
+        X_new,
+        drop_first=True,
+        dtype=float,
+    )
+
+    # 对齐训练特征列：缺失列补 0，多余列删除
+    keep_cols = [
+        col
+        for col in training_feature_names
+        if col != "const"
+    ]
+
+    for col in keep_cols:
+        if col not in X_new.columns:
+            X_new[col] = 0.0
+            notes.append(
+                f"新数据缺少特征「{col}」，已按 0 填补（该类别未出现）。"
+            )
+
+    extra_cols = [
+        col
+        for col in X_new.columns
+        if col not in keep_cols
+    ]
+
+    if extra_cols:
+        X_new = X_new.drop(columns=extra_cols)
+
+    X_new = X_new[keep_cols]
+    X_new = X_new.replace([np.inf, -np.inf], np.nan)
+
+    return X_new, n_dropped, notes
+
+
+def predict_new_data(
+    fitted_result,
+    new_df,
+    target,
+    predictors,
+    variable_types,
+):
+    """
+    用训练好的模型对新数据做预测。
+
+    返回 (结果表, 说明文本列表) 或 (None, 错误信息)。
+    """
+    model = fitted_result["model"]
+    model_type = fitted_result["model_type"]
+    meta = fitted_result.get("meta") or {}
+
+    training_feature_names = meta.get("feature_names") or []
+    dummy_info = meta.get("dummy_info") or {}
+
+    if not training_feature_names:
+        raise ValueError("模型缺少特征信息，无法对新数据预测。")
+
+    missing_cols = [
+        col for col in predictors if col not in new_df.columns
+    ]
+
+    if missing_cols:
+        raise ValueError(
+            "新数据缺少以下自变量列："
+            + "、".join(missing_cols)
+        )
+
+    X_new, n_dropped, notes = prepare_new_data(
+        new_df,
+        predictors,
+        variable_types,
+        training_feature_names,
+        dummy_info,
+    )
+
+    if X_new.shape[0] == 0:
+        raise ValueError("新数据没有可用样本用于预测。")
+
+    X_new = sm.add_constant(
+        X_new,
+        has_constant="add",
+    )
+
+    prediction = np.asarray(
+        model.predict(X_new),
+        dtype=float,
+    )
+
+    result = new_df.copy()
+    result = result.iloc[: len(prediction)].reset_index(drop=True)
+
+    if model_type == "二项Logistic回归":
+        result["预测概率"] = prediction
+        result["预测类别"] = (prediction >= 0.5).astype(int)
+    elif model_type == "多项Logistic回归":
+        # prediction 为 (n_samples, n_classes) 概率矩阵
+        result["预测类别"] = np.argmax(prediction, axis=1)
+
+        for class_index in range(prediction.shape[1]):
+            result[f"类别{class_index}概率"] = prediction[:, class_index]
+    else:
+        result["预测值"] = prediction
+
+    if n_dropped:
+        notes.append(
+            f"因全部缺失无法填补，删除了 {n_dropped} 行样本。"
+        )
+
+    return result, notes
+
+
+def compare_models(
+    y,
+    X,
+    groups,
+    model_types,
+    robust_se=False,
+):
+    """
+    同时拟合多个候选模型并汇总关键评价指标，返回对比表。
+    """
+    rows = []
+
+    for model_type in model_types:
+        try:
+            fitted = fit_model(
+                y,
+                X,
+                groups,
+                model_type,
+                robust_se=robust_se,
+            )
+
+            metric_table = make_metric_table(fitted)
+            metric_map = dict(
+                zip(
+                    metric_table["指标"],
+                    metric_table["数值"],
+                )
+            )
+
+            row = {"模型": model_type}
+
+            if not model_is_converged(fitted["model"]):
+                row["收敛状态"] = "未收敛⚠️"
+            else:
+                row["收敛状态"] = "正常"
+
+            if "AIC" in metric_map:
+                row["AIC"] = metric_map["AIC"]
+            if "BIC" in metric_map:
+                row["BIC"] = metric_map["BIC"]
+            if "R²" in metric_map:
+                row["R²"] = metric_map["R²"]
+            if "调整R²" in metric_map:
+                row["调整R²"] = metric_map["调整R²"]
+            if "RMSE" in metric_map:
+                row["RMSE"] = metric_map["RMSE"]
+            if "准确率" in metric_map:
+                row["准确率"] = metric_map["准确率"]
+            if "平衡准确率" in metric_map:
+                row["平衡准确率"] = metric_map["平衡准确率"]
+            if "Log Loss" in metric_map:
+                row["Log Loss"] = metric_map["Log Loss"]
+
+            rows.append(row)
+
+        except Exception as exc:
+            rows.append(
+                {
+                    "模型": model_type,
+                    "收敛状态": f"拟合失败：{exc}",
+                }
+            )
+
+    return pd.DataFrame(rows)
+
+
+# ============================================================
 # 十、模型结果、诊断和论文文本
 # ============================================================
 
@@ -1986,6 +2431,13 @@ def make_result_table(model, model_type):
     bse_df = pd.DataFrame(bse)
     pvalues_df = pd.DataFrame(pvalues)
 
+    # 修复：多项 Logistic（MNLogit）的 conf_int 同样是 DataFrame，
+    # 此前被丢弃，导致三线表缺置信区间，这里一并展开。
+    conf_int_df = None
+
+    if conf_int is not None and hasattr(conf_int, "columns"):
+        conf_int_df = pd.DataFrame(conf_int)
+
     rows = []
 
     for variable in params_df.index:
@@ -2000,22 +2452,33 @@ def make_result_table(model, model_type):
                 category,
             ]
 
-            rows.append(
-                {
-                    "变量": variable,
-                    "类别": category,
-                    "回归系数": coef,
-                    "标准误": bse_df.loc[
+            row_item = {
+                "变量": variable,
+                "类别": category,
+                "回归系数": coef,
+                "标准误": bse_df.loc[
+                    variable,
+                    category,
+                ],
+                "P值": p_value,
+                "优势比_OR": np.exp(coef),
+                "显著性判断": significance_label(
+                    p_value
+                ),
+            }
+
+            if conf_int_df is not None:
+                try:
+                    ci_values = conf_int_df.loc[
                         variable,
                         category,
-                    ],
-                    "P值": p_value,
-                    "优势比_OR": np.exp(coef),
-                    "显著性判断": significance_label(
-                        p_value
-                    ),
-                }
-            )
+                    ]
+                    row_item["置信区间下限"] = ci_values[0]
+                    row_item["置信区间上限"] = ci_values[1]
+                except Exception:
+                    pass
+
+            rows.append(row_item)
 
     return pd.DataFrame(rows)
 
@@ -2579,44 +3042,29 @@ def generate_assumptions(
     
 with st.sidebar:
     # ===== 背景音乐 BGM =====
-    st.sidebar.subheader("🎵 背景音乐")
-    bgm_path = Path(__file__).resolve().parent / "assets" / "bgm.mp3"
-    bgm_enabled = st.sidebar.checkbox("开启背景音乐", value=False)
+    with st.expander("🎵 背景音乐（可选）", expanded=False):
+        bgm_path = Path(__file__).resolve().parent / "assets" / "bgm.mp3"
+        bgm_enabled = st.checkbox("开启背景音乐", value=False)
 
-    if bgm_enabled:
-        try:
+        if bgm_enabled:
             if bgm_path.exists():
-                bgm_bytes = bgm_path.read_bytes()
-                st.sidebar.audio(bgm_bytes, format="audio/mp3", autoplay=True)
+                st.audio(bgm_path.read_bytes(), format="audio/mp3")
             else:
-                uploaded_bgm = st.sidebar.file_uploader(
+                uploaded_bgm = st.file_uploader(
                     "上传背景音乐（mp3/wav/ogg）",
                     type=["mp3", "wav", "ogg"],
                     key="bgm_uploader",
                 )
                 if uploaded_bgm is not None:
-                    st.sidebar.audio(
+                    st.audio(
                         uploaded_bgm.getvalue(),
                         format=uploaded_bgm.type,
-                        autoplay=True,
                     )
                 else:
-                    st.sidebar.info(
+                    st.info(
                         "未检测到背景音乐。\n"
                         "可将 bgm.mp3 放入 assets 文件夹，或直接上传音乐文件。"
                     )
-        except TypeError:
-            # 旧版 Streamlit 不支持 autoplay 参数时，退化为普通播放器
-            if bgm_path.exists():
-                st.sidebar.audio(bgm_path.read_bytes(), format="audio/mp3")
-            else:
-                uploaded_bgm = st.sidebar.file_uploader(
-                    "上传背景音乐（mp3/wav/ogg）",
-                    type=["mp3", "wav", "ogg"],
-                    key="bgm_uploader_old",
-                )
-                if uploaded_bgm is not None:
-                    st.sidebar.audio(uploaded_bgm.getvalue())
     st.title('功能导航')
     mode_options = [
         "数据分析",
@@ -2640,6 +3088,24 @@ with st.sidebar:
     if app_mode != st.session_state.get('app_mode', '数据分析'):
         st.session_state.app_mode = app_mode
         st.rerun()
+
+    # ===== 新手引导面板 =====
+    if app_mode == "优化求解":
+        with st.expander("💡 优化求解使用说明", expanded=True):
+            st.markdown(
+                "1. 上传数据表（决策变量可来自数据列）；\n"
+                "2. 选择决策变量所在列；\n"
+                "3. 输入目标函数系数（线性）或表达式（非线性）；\n"
+                "4. 添加约束条件（注意系数个数必须与变量数一致）；\n"
+                "5. 设置边界后点击 🚀 求解。\n\n"
+                "**新手提示：** 非线性规划请先勾选“启用上方线性约束”试跑，"
+                "求解失败时可取消约束或改用遗传算法。"
+            )
+    else:
+        render_guide_panel(
+            st.session_state.get("guide_step", 0)
+        )
+
     if app_mode == '数据分析':
         st.header("基本设置")
 
@@ -2770,7 +3236,7 @@ with st.sidebar:
                     }
                 )
 
-                st.dataframe(
+                _st_dataframe(
                     score_table,
                     use_container_width=True,
                 )
@@ -2919,6 +3385,11 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
         )
         st.stop()
 
+    # 引导进度：已完成第 2 步（上传数据表）
+    st.session_state["guide_step"] = max(
+        st.session_state.get("guide_step", 0),
+        2,
+    )
 
     # ============================================================
     # 十三、数据初探
@@ -2951,7 +3422,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
     )
 
     st.write("数据前20行")
-    st.dataframe(
+    _st_dataframe(
         raw_df.head(20),
         use_container_width=True,
     )
@@ -2978,7 +3449,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
             }
         )
 
-        st.dataframe(
+        _st_dataframe(
             info_table,
             use_container_width=True,
         )
@@ -3074,6 +3545,11 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
         )
         st.stop()
 
+    # 引导进度：已完成第 3 步（选择因变量与自变量）
+    st.session_state["guide_step"] = max(
+        st.session_state.get("guide_step", 0),
+        3,
+    )
 
     # ============================================================
     # 十五、变量类型识别
@@ -3107,7 +3583,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
         }
     )
 
-    st.dataframe(
+    _st_dataframe(
         initial_type_table,
         use_container_width=True,
     )
@@ -3147,6 +3623,11 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
     # 这里不能再次自动覆盖，否则“次数”“分类”等人工设置会失效。
     # 自动识别结果只用于初始默认值。
 
+    # 引导进度：已完成第 4 步（确认变量类型）
+    st.session_state["guide_step"] = max(
+        st.session_state.get("guide_step", 0),
+        4,
+    )
 
     current_signature = build_analysis_signature(
         file_name=uploaded_file.name,
@@ -3195,7 +3676,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
             variable_types=variable_types,
         )
 
-        st.dataframe(
+        _st_dataframe(
             sample_symbol_table,
             use_container_width=True,
         )
@@ -3366,6 +3847,12 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
         errors="ignore",
     )
 
+    # 引导进度：已完成第 5 步（数据清洗）
+    st.session_state["guide_step"] = max(
+        st.session_state.get("guide_step", 0),
+        5,
+    )
+
     cleaning_summary = pd.DataFrame(
         {
             "项目": [
@@ -3442,23 +3929,23 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
         clean_data_for_model.shape[0],
     )
 
-    st.dataframe(
+    _st_dataframe(
         cleaning_summary,
         use_container_width=True,
     )
 
-    st.dataframe(
+    _st_dataframe(
         missing_detail_table,
         use_container_width=True,
     )
 
     if not outlier_detail_table.empty:
-        st.dataframe(
+        _st_dataframe(
             outlier_detail_table,
             use_container_width=True,
         )
 
-    st.dataframe(
+    _st_dataframe(
         clean_data_for_model.head(20),
         use_container_width=True,
     )
@@ -3512,7 +3999,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
 
 
     # ============================================================
-    # 十七·补充、描述统计与正态性检验
+    # 5.5 描述统计与正态性检验（十七·补充）
     # ============================================================
 
     st.subheader("5.5 描述统计与正态性检验")
@@ -3589,7 +4076,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
         shapiro_table = pd.DataFrame(shapiro_results)
 
         st.write("描述统计表（均值、标准差、偏度、峰度等）")
-        st.dataframe(
+        _st_dataframe(
             desc_table,
             use_container_width=True,
         )
@@ -3601,7 +4088,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
         )
 
         st.write("正态性检验（Shapiro-Wilk）")
-        st.dataframe(
+        _st_dataframe(
             shapiro_table,
             use_container_width=True,
         )
@@ -3646,7 +4133,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
 
 
     # ============================================================
-    # 十七·补充、数据标准化与归一化
+    # 5.6 数据标准化与归一化（十七·补充）
     # ============================================================
 
     st.subheader("5.6 数据标准化与归一化")
@@ -3719,7 +4206,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                     )
 
         st.write("标准化后的数据（前20行）")
-        st.dataframe(
+        _st_dataframe(
             std_df.head(20),
             use_container_width=True,
         )
@@ -3803,8 +4290,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
             )
             ax.set_xlabel(selected_col)
 
-            st.pyplot(fig)
-            plt.close(fig)
+            show_fig(fig)
 
     elif chart_type == "变量箱线图":
         if not numeric_variables:
@@ -3836,8 +4322,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
 
                 ax.set_title("变量箱线图")
 
-                st.pyplot(fig)
-                plt.close(fig)
+                show_fig(fig)
 
     elif chart_type == "因变量-自变量散点图":
         x_candidates = [
@@ -3888,8 +4373,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                 f"{target} 与 {x_col} 的散点图"
             )
 
-            st.pyplot(fig)
-            plt.close(fig)
+            show_fig(fig)
 
     elif chart_type == "因变量-自变量曲线图":
         x_candidates = [
@@ -3945,8 +4429,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                 f"{target} 与 {x_col} 的变化曲线"
             )
 
-            st.pyplot(fig)
-            plt.close(fig)
+            show_fig(fig)
 
     elif chart_type == "数值变量相关性热力图":
         if len(numeric_variables) < 2:
@@ -3972,8 +4455,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                 "数值变量Pearson相关性热力图"
             )
 
-            st.pyplot(fig)
-            plt.close(fig)
+            show_fig(fig)
 
     elif chart_type == "分类变量频数图":
         if not categorical_variables:
@@ -4013,8 +4495,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                 f"{selected_col} 频数图"
             )
 
-            st.pyplot(fig)
-            plt.close(fig)
+            show_fig(fig)
 
 
     # ============================================================
@@ -4035,7 +4516,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
             "没有足够的连续型或次数型变量用于相关性分析。"
         )
     else:
-        st.dataframe(
+        _st_dataframe(
             corr_table,
             use_container_width=True,
         )
@@ -4177,6 +4658,60 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
         # 统一使用 final_model_type，不再使用未定义的 model_type。
         model_type = final_model_type
 
+        # ===== 新增：多模型一键对比 =====
+        with st.expander("🔬 多模型对比（可选）", expanded=False):
+            st.caption(
+                "同时拟合多个候选模型，对比 AIC / BIC / R² / 准确率等指标，"
+                "帮助你选出最合适的模型。混合效应模型需要已选择分组变量。"
+            )
+
+            compare_models_list = st.multiselect(
+                "选择要对比的模型",
+                MODEL_OPTIONS,
+                default=[recommended_model],
+                key="compare_models_selector",
+            )
+
+            if compare_models_list and st.button(
+                "运行多模型对比",
+                key="run_model_compare",
+            ):
+                try:
+                    compare_df = compare_models(
+                        y,
+                        X,
+                        groups,
+                        compare_models_list,
+                        robust_se=robust_se,
+                    )
+                    st.session_state["compare_df"] = compare_df
+                    st.session_state["compare_success"] = True
+                except Exception as exc:
+                    st.error(f"多模型对比失败：{exc}")
+                    st.session_state.pop("compare_df", None)
+
+            if "compare_df" in st.session_state:
+                _st_dataframe(
+                    st.session_state["compare_df"],
+                    use_container_width=True,
+                )
+                dataframe_download(
+                    st.session_state["compare_df"],
+                    "多模型对比结果.csv",
+                    key="download_compare_models",
+                )
+
+                compare_df_now = st.session_state["compare_df"]
+
+                if "AIC" in compare_df_now.columns:
+                    best_row = compare_df_now.loc[
+                        compare_df_now["AIC"].idxmin()
+                    ]
+                    st.success(
+                        f"按 AIC 最小原则，推荐模型：**{best_row['模型']}**"
+                        f"（AIC={best_row['AIC']:.3f}）"
+                    )
+
         previous_model_type = st.session_state.get(
             "selected_model_type"
         )
@@ -4213,7 +4748,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                 "当前没有足够的自变量计算 VIF。"
             )
         else:
-            st.dataframe(
+            _st_dataframe(
                 vif_table,
                 use_container_width=True,
             )
@@ -4253,6 +4788,10 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                     robust_se=robust_se,
                 )
 
+                # 携带模型元信息（特征名、哑变量说明等），
+                # 供“新数据预测”等功能使用。
+                new_fitted_result["meta"] = model_meta
+
                 st.session_state[
                     "fitted_result"
                 ] = new_fitted_result
@@ -4270,10 +4809,6 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                 ] = model_meta
 
                 st.session_state[
-                    "X_for_assumption"
-                ] = X
-
-                st.session_state[
                     "vif_table"
                 ] = vif_table
 
@@ -4285,6 +4820,12 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
 
                 st.success(
                     "模型拟合完成，结果已经保存。"
+                )
+
+                # 引导进度：已完成第 6 步（建模与诊断）
+                st.session_state["guide_step"] = max(
+                    st.session_state.get("guide_step", 0),
+                    6,
                 )
 
             except Exception as exc:
@@ -4337,10 +4878,65 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                     }
                 )
 
-                st.dataframe(
+                _st_dataframe(
                     mapping_table,
                     use_container_width=True,
                 )
+
+            # ===== 新增：虚拟变量编码说明 =====
+            stored_meta = st.session_state.get(
+                "model_meta",
+                {},
+            )
+            dummy_info = (stored_meta or {}).get(
+                "dummy_info",
+                {},
+            )
+
+            if dummy_info:
+                with st.expander(
+                    "🧩 分类变量哑变量编码说明",
+                    expanded=False,
+                ):
+                    st.caption(
+                        "程序对分类自变量使用独热编码，并删除参照类别"
+                        "（drop_first）。系数表中的列名含义如下。"
+                    )
+
+                    dummy_rows = []
+
+                    for col, info in dummy_info.items():
+                        categories = info.get(
+                            "原始类别",
+                            [],
+                        )
+                        reference = info.get(
+                            "参照类别（被删除）",
+                            "",
+                        )
+
+                        for cat in categories:
+                            if cat == reference:
+                                continue
+                            dummy_rows.append(
+                                {
+                                    "原始变量": col,
+                                    "哑变量列名": f"{col}_{cat}",
+                                    "含义": (
+                                        f"该观测的「{col}」是否为「{cat}」"
+                                        f"（参照类别：{reference}）"
+                                    ),
+                                }
+                            )
+
+                    dummy_table = pd.DataFrame(
+                        dummy_rows
+                    )
+
+                    _st_dataframe(
+                        dummy_table,
+                        use_container_width=True,
+                    )
 
             if model_is_converged(fitted_model):
                 st.success(
@@ -4356,7 +4952,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
             )
 
             st.write("模型评价指标")
-            st.dataframe(
+            _st_dataframe(
                 metric_table,
                 use_container_width=True,
             )
@@ -4373,7 +4969,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
             )
 
             st.write("模型系数结果")
-            st.dataframe(
+            _st_dataframe(
                 result_table,
                 use_container_width=True,
             )
@@ -4412,7 +5008,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                 "实际值、预测值与残差"
             )
 
-            st.dataframe(
+            _st_dataframe(
                 prediction_table.head(100),
                 use_container_width=True,
             )
@@ -4422,6 +5018,112 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                 "实际值预测值残差.csv",
                 key="download_prediction_table",
             )
+
+            # ----------------------------------------------------
+            # 新增：用训练好的模型预测新数据
+            # ----------------------------------------------------
+
+            st.subheader("新数据预测")
+
+            st.caption(
+                "上传一份包含与建模时相同自变量列的新数据表"
+                "（CSV/Excel），程序会按训练时的规则自动预处理并输出预测值。"
+            )
+
+            new_data_file = st.file_uploader(
+                "上传新数据表（预测用）",
+                type=["csv", "xlsx", "xls"],
+                key="new_data_uploader",
+            )
+
+            if new_data_file is not None:
+                try:
+                    new_data_file.seek(0)
+
+                    if new_data_file.name.lower().endswith(".csv"):
+                        try:
+                            new_df = pd.read_csv(
+                                new_data_file,
+                                encoding="utf-8",
+                            )
+                        except UnicodeDecodeError:
+                            new_data_file.seek(0)
+                            new_df = pd.read_csv(
+                                new_data_file,
+                                encoding="gbk",
+                            )
+                    else:
+                        new_df = pd.read_excel(new_data_file)
+
+                    new_df.columns = make_unique_columns(
+                        new_df.columns
+                    )
+
+                    st.info(
+                        f"新数据共 {new_df.shape[0]} 行、"
+                        f"{new_df.shape[1]} 列。"
+                    )
+
+                    if st.button(
+                        "🚀 生成新数据预测",
+                        key="run_new_data_predict",
+                    ):
+                        try:
+                            (
+                                prediction_new,
+                                predict_notes,
+                            ) = predict_new_data(
+                                fitted_result,
+                                new_df,
+                                target,
+                                predictors,
+                                variable_types,
+                            )
+
+                            st.session_state[
+                                "new_prediction_df"
+                            ] = prediction_new
+                            st.session_state[
+                                "new_prediction_notes"
+                            ] = predict_notes
+                        except Exception as predict_error:
+                            st.error(
+                                f"新数据预测失败：{predict_error}"
+                            )
+
+                except Exception as read_error:
+                    st.error(f"读取新数据失败：{read_error}")
+
+            if "new_prediction_df" in st.session_state:
+                st.write("预测结果（前100行）")
+
+                _st_dataframe(
+                    st.session_state[
+                        "new_prediction_df"
+                    ].head(100),
+                    use_container_width=True,
+                )
+
+                dataframe_download(
+                    st.session_state[
+                        "new_prediction_df"
+                    ],
+                    "新数据预测结果.csv",
+                    key="download_new_prediction",
+                )
+
+                predict_notes = st.session_state.get(
+                    "new_prediction_notes",
+                    [],
+                )
+
+                if predict_notes:
+                    with st.expander(
+                        "查看预测预处理说明",
+                        expanded=False,
+                    ):
+                        for note in predict_notes:
+                            st.markdown(f"- {note}")
 
             # ----------------------------------------------------
             # 训练集 / 测试集评估
@@ -4498,17 +5200,19 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                     X_train = X.iloc[train_index]
                     X_test = X.iloc[test_index]
 
-                    test_groups = None
+                    # 修复：此处的分组属于“训练集分组”（用于拟合训练集模型），
+                    # 原先命名为 test_groups 与语义相反，容易误导后续维护。
+                    train_groups = None
 
                     if has_groups:
-                        test_groups = groups.iloc[
+                        train_groups = groups.iloc[
                             train_index
                         ].reset_index(drop=True)
 
                     test_model_result = fit_model(
                         y_train.reset_index(drop=True),
                         X_train.reset_index(drop=True),
-                        test_groups,
+                        train_groups,
                         stored_model_type,
                         robust_se=robust_se,
                     )
@@ -4680,7 +5384,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                         }
                     )
 
-                    st.dataframe(
+                    _st_dataframe(
                         test_metric_table,
                         use_container_width=True,
                     )
@@ -4712,7 +5416,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                     )
                 )
 
-                st.dataframe(
+                _st_dataframe(
                     diagnostic_table,
                     use_container_width=True,
                 )
@@ -4764,7 +5468,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                         "残差-拟合值图"
                     )
 
-                    st.pyplot(fig_residual)
+                    show_fig(fig_residual)
                     plt.close(fig_residual)
 
                 with diag_col2:
@@ -4782,7 +5486,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                         "残差正态QQ图"
                     )
 
-                    st.pyplot(fig_qq)
+                    show_fig(fig_qq)
                     plt.close(fig_qq)
 
                 try:
@@ -4810,7 +5514,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                         "Cook距离较大的观测"
                     )
 
-                    st.dataframe(
+                    _st_dataframe(
                         cooks_table.head(20),
                         use_container_width=True,
                     )
@@ -4863,7 +5567,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                 )
 
                 st.write("混淆矩阵")
-                st.dataframe(
+                _st_dataframe(
                     cm_table,
                     use_container_width=True,
                 )
@@ -4873,6 +5577,77 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                     "二分类混淆矩阵.csv",
                     key="download_confusion_matrix",
                 )
+
+                # ===== 新增：ROC 曲线与混淆矩阵热力图 =====
+                try:
+                    probability = np.asarray(
+                        fitted_result["probability"],
+                        dtype=float,
+                    )
+                    y_true = np.asarray(
+                        prediction_table["实际值"],
+                        dtype=int,
+                    )
+
+                    from sklearn.metrics import roc_curve, auc
+
+                    fpr, tpr, _ = roc_curve(
+                        y_true,
+                        probability,
+                    )
+                    roc_auc = auc(fpr, tpr)
+
+                    fig_roc, ax_roc = plt.subplots(
+                        figsize=(7, 5)
+                    )
+                    ax_roc.plot(
+                        fpr,
+                        tpr,
+                        color="#1f6feb",
+                        lw=2,
+                        label=f"ROC曲线 (AUC={roc_auc:.3f})",
+                    )
+                    ax_roc.plot(
+                        [0, 1],
+                        [0, 1],
+                        color="gray",
+                        linestyle="--",
+                        label="随机猜测",
+                    )
+                    ax_roc.set_xlabel("假正率 (FPR)")
+                    ax_roc.set_ylabel("真正率 (TPR)")
+                    ax_roc.set_title("ROC 曲线")
+                    ax_roc.legend(loc="lower right")
+                    ax_roc.set_xlim(0, 1)
+                    ax_roc.set_ylim(0, 1)
+                    show_fig(fig_roc, name="roc_curve")
+                except Exception as roc_error:
+                    st.info(f"ROC 曲线绘制失败：{roc_error}")
+
+                try:
+                    fig_cm, ax_cm = plt.subplots(
+                        figsize=(6, 5)
+                    )
+                    sns.heatmap(
+                        cm,
+                        annot=True,
+                        fmt="d",
+                        cmap="Blues",
+                        xticklabels=cm_columns,
+                        yticklabels=cm_index,
+                        ax=ax_cm,
+                    )
+                    ax_cm.set_title("混淆矩阵热力图")
+                    ax_cm.set_xlabel("预测类别")
+                    ax_cm.set_ylabel("真实类别")
+                    show_fig(
+                        fig_cm,
+                        name="confusion_matrix_heatmap",
+                    )
+                except Exception as cm_error:
+                    st.info(
+                        f"混淆矩阵热力图绘制失败：{cm_error}"
+                    )
 
             # ----------------------------------------------------
             # 模型假设
@@ -4953,7 +5728,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
 
 
     # ============================================================
-    # 二十一·补充、高级分析方法
+    # 二十一、高级分析方法（补充）
     # ============================================================
 
     st.subheader("8.5 高级分析方法")
@@ -4961,6 +5736,35 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
     if "clean_data_for_model" not in locals() or clean_data_for_model is None:
         st.info("请先在上方完成数据清洗，再使用高级分析方法。")
     else:
+        # 修复：高级分析结果与当前数据绑定。
+        # 更换数据文件后自动清除旧结果，避免误用上一次数据的结果。
+        adv_file_hash = hashlib.sha256(
+            uploaded_file.getvalue()
+        ).hexdigest()
+
+        for _adv_key in [
+            "topsis_data",
+            "gm11_result",
+            "arima_result",
+            "anova_result",
+            "chi2_result",
+            "pca_data",
+            "cluster_data",
+            "ml_data",
+        ]:
+            _adv_item = st.session_state.get(_adv_key)
+
+            if isinstance(_adv_item, dict) and (
+                _adv_item.get("_data_hash") != adv_file_hash
+            ):
+                st.session_state.pop(_adv_key, None)
+
+        # 引导进度：已进入第 7 步（高级分析，可选）
+        st.session_state["guide_step"] = max(
+            st.session_state.get("guide_step", 0),
+            7,
+        )
+
         adv_tabs = st.tabs(
             [
                 "熵权法+TOPSIS",
@@ -5027,19 +5831,40 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
 
                             matrix = eval_df.to_numpy(dtype=float)
 
+                            # 修复：负向指标不再取倒数（含 0/负值时会产生 inf/NaN），
+                            # 改为“取反 + 平移”同向化，保证越大越好。
                             for i, col in enumerate(eval_cols):
+                                col_values = matrix[:, i]
+
                                 if directions[col] == "负向指标":
-                                    matrix[:, i] = 1.0 / matrix[:, i]
+                                    matrix[:, i] = (
+                                        col_values.max() - col_values
+                                    )
 
-                            sums = matrix.sum(axis=0)
-                            p = matrix / sums
+                            # min-max 归一化到 [0,1]，消除量纲
+                            col_min = matrix.min(axis=0)
+                            col_max = matrix.max(axis=0)
+                            col_range = col_max - col_min
+                            const_mask = col_range == 0
+                            col_range[const_mask] = 1.0
+                            matrix = (matrix - col_min) / col_range
 
-                            k = 1.0 / np.log(len(eval_df))
+                            n_obj = len(eval_df)
                             eps = 1e-12
+
+                            # 熵权法：常数列（无区分信息）按等概率处理，权重为 0
+                            p = matrix / np.maximum(
+                                matrix.sum(axis=0),
+                                eps,
+                            )
+                            p[:, const_mask] = 1.0 / n_obj
+
+                            k = 1.0 / np.log(n_obj)
                             entropy = -k * np.sum(
                                 p * np.log(p + eps),
                                 axis=0,
                             )
+                            entropy[const_mask] = 1.0
                             d = 1 - entropy
                             weights = d / d.sum()
 
@@ -5052,10 +5877,8 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                                 }
                             )
 
-                            norm_matrix = matrix / np.sqrt(
-                                (matrix**2).sum(axis=0)
-                            )
-                            weighted = norm_matrix * weights
+                            # 归一化后无需再除以向量长度
+                            weighted = matrix * weights
 
                             ideal_best = weighted.max(axis=0)
                             ideal_worst = weighted.min(axis=0)
@@ -5085,6 +5908,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                             st.session_state["topsis_data"] = {
                                 "weight_table": weight_table,
                                 "topsis_table": topsis_table,
+                                "_data_hash": adv_file_hash,
                             }
                         except Exception as eval_error:
                             st.error(f"熵权法/TOPSIS计算失败：{eval_error}")
@@ -5095,7 +5919,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                         topsis_table = topsis_stored["topsis_table"]
 
                         st.write("熵权法计算权重")
-                        st.dataframe(
+                        _st_dataframe(
                             weight_table,
                             use_container_width=True,
                         )
@@ -5107,7 +5931,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                         )
 
                         st.write("TOPSIS 综合评价排名")
-                        st.dataframe(
+                        _st_dataframe(
                             topsis_table,
                             use_container_width=True,
                         )
@@ -5252,6 +6076,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                             "col": gm_col,
                             "result": gm_result,
                             "series": gm_series,
+                            "_data_hash": adv_file_hash,
                         }
                     except Exception as gm_error:
                         st.error(f"灰色预测失败：{gm_error}")
@@ -5278,7 +6103,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                     )
 
                     st.write("灰色预测结果")
-                    st.dataframe(
+                    _st_dataframe(
                         gm_out,
                         use_container_width=True,
                     )
@@ -5314,7 +6139,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                     ax_gm.set_ylabel(gm_stored["col"])
                     ax_gm.set_title(f"{gm_stored['col']} 灰色预测 GM(1,1)")
                     ax_gm.legend()
-                    st.pyplot(fig_gm)
+                    show_fig(fig_gm)
                     plt.close(fig_gm)
 
                     gm_text = (
@@ -5398,18 +6223,33 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                         best_aic = np.inf
                         best_order = (1, d, 0)
 
-                        for p in range(0, 4):
-                            for q in range(0, 4):
-                                try:
-                                    tmp_model = ARIMA(
-                                        arima_series,
-                                        order=(p, d, q),
-                                    ).fit()
-                                    if tmp_model.aic < best_aic:
-                                        best_aic = tmp_model.aic
-                                        best_order = (p, d, q)
-                                except Exception:
-                                    continue
+                        # 修复：限制 (p+q) <= 3，减少候选组合数，
+                        # 避免长时间无反馈的网格搜索。
+                        with st.status(
+                            "正在自动搜索 ARIMA 阶数 (p,d,q)…",
+                            expanded=False,
+                        ) as _arima_status:
+                            for p in range(0, 4):
+                                for q in range(0, 4):
+                                    if p + q > 3:
+                                        continue
+                                    try:
+                                        tmp_model = ARIMA(
+                                            arima_series,
+                                            order=(p, d, q),
+                                        ).fit()
+                                        if tmp_model.aic < best_aic:
+                                            best_aic = tmp_model.aic
+                                            best_order = (p, d, q)
+                                    except Exception:
+                                        continue
+                            _arima_status.update(
+                                label=(
+                                    "搜索完成，最优阶数 "
+                                    f"ARIMA{best_order}"
+                                ),
+                                state="complete",
+                            )
 
                         arima_model = ARIMA(
                             arima_series,
@@ -5441,6 +6281,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                                 arima_model.fittedvalues
                             ),
                             "series": arima_series,
+                            "_data_hash": adv_file_hash,
                         }
                     except Exception as arima_error:
                         st.error(f"ARIMA预测失败：{arima_error}")
@@ -5470,7 +6311,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                         f"ADF检验P值={ar_stored['adf_p']:.4f}"
                     )
 
-                    st.dataframe(
+                    _st_dataframe(
                         ar_out,
                         use_container_width=True,
                     )
@@ -5523,7 +6364,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                         f"{ar_stored['col']} ARIMA 预测"
                     )
                     ax_ar.legend()
-                    st.pyplot(fig_ar)
+                    show_fig(fig_ar)
                     plt.close(fig_ar)
 
         # ---------- 方差分析 + 卡方检验 ----------
@@ -5595,6 +6436,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                             "h": h_stat,
                             "hp": h_p,
                             "means": group_means,
+                            "_data_hash": adv_file_hash,
                         }
                     except Exception as anova_error:
                         st.error(f"方差分析失败：{anova_error}")
@@ -5602,7 +6444,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                 if "anova_result" in st.session_state:
                     ar_result = st.session_state["anova_result"]
 
-                    st.dataframe(
+                    _st_dataframe(
                         ar_result["means"],
                         use_container_width=True,
                     )
@@ -5666,6 +6508,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                                 "p": chi2_p,
                                 "dof": dof,
                                 "table": ct,
+                                "_data_hash": adv_file_hash,
                             }
                         except Exception as chi_error:
                             st.error(f"卡方检验失败：{chi_error}")
@@ -5673,7 +6516,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                     if "chi2_result" in st.session_state:
                         cr_result = st.session_state["chi2_result"]
 
-                        st.dataframe(
+                        _st_dataframe(
                             cr_result["table"],
                             use_container_width=True,
                         )
@@ -5782,6 +6625,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                                 "score_table": score_table,
                                 "n_keep": n_keep,
                                 "cum_ratio": cum_ratio,
+                                "_data_hash": adv_file_hash,
                             }
                         except Exception as pca_error:
                             st.error(f"PCA失败：{pca_error}")
@@ -5790,7 +6634,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                         pca_stored = st.session_state["pca_data"]
 
                         st.write("方差解释率")
-                        st.dataframe(
+                        _st_dataframe(
                             pca_stored["var_table"],
                             use_container_width=True,
                         )
@@ -5802,13 +6646,13 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                         )
 
                         st.write("主成分载荷（变量贡献）")
-                        st.dataframe(
+                        _st_dataframe(
                             pca_stored["loadings"],
                             use_container_width=True,
                         )
 
                         st.write("主成分得分（前20行）")
-                        st.dataframe(
+                        _st_dataframe(
                             pca_stored["score_table"].head(20),
                             use_container_width=True,
                         )
@@ -5835,7 +6679,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                         ax_pca.set_ylabel("累计方差解释率")
                         ax_pca.set_title("累计方差解释率")
                         ax_pca.legend()
-                        st.pyplot(fig_pca)
+                        show_fig(fig_pca)
                         plt.close(fig_pca)
 
                         pca_text = (
@@ -5933,6 +6777,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                                 "profile": profile,
                                 "k": int(k_value),
                                 "wcss": wcss_value,
+                                "_data_hash": adv_file_hash,
                             }
                         except Exception as clu_error:
                             st.error(f"聚类失败：{clu_error}")
@@ -5941,7 +6786,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                         clu_stored = st.session_state["cluster_data"]
 
                         st.write("各类别样本数")
-                        st.dataframe(
+                        _st_dataframe(
                             clu_stored["clu_out"][
                                 "聚类结果"
                             ].value_counts().rename_axis(
@@ -5951,7 +6796,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                         )
 
                         st.write("聚类结果（前20行）")
-                        st.dataframe(
+                        _st_dataframe(
                             clu_stored["clu_out"].head(20),
                             use_container_width=True,
                         )
@@ -5963,7 +6808,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                         )
 
                         st.write("各类别特征均值（画像）")
-                        st.dataframe(
+                        _st_dataframe(
                             clu_stored["profile"],
                             use_container_width=True,
                         )
@@ -6021,8 +6866,15 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
 
                     ml_raw = clean_data_for_model[ml_target]
 
+                    # 任务类型：字符串/类别型目标按分类；
+                    # 数值型低基数（如 0/1 标记）也按分类。
                     task_is_classification = (
                         ml_raw.dtype == object
+                        or pd.api.types.is_string_dtype(ml_raw)
+                        or isinstance(
+                            ml_raw.dtype,
+                            pd.CategoricalDtype,
+                        )
                         or ml_raw.nunique(dropna=True) <= 10
                     )
 
@@ -6053,10 +6905,21 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                             for col_ml in ml_feats:
                                 col_series = X_ml[col_ml]
 
-                                if (
+                                # 修复：仅字符串/类别型特征转类别编码；
+                                # 数值型特征即使取值较少（如 1-10 的等级）
+                                # 也保持数值，不再误判为分类。
+                                is_string_like = (
                                     col_series.dtype == object
-                                    or col_series.nunique(dropna=True) <= 10
-                                ):
+                                    or pd.api.types.is_string_dtype(
+                                        col_series
+                                    )
+                                    or isinstance(
+                                        col_series.dtype,
+                                        pd.CategoricalDtype,
+                                    )
+                                )
+
+                                if is_string_like:
                                     X_ml[col_ml] = col_series.astype(
                                         "category"
                                     ).cat.codes
@@ -6183,6 +7046,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                                     if task_is_classification
                                     else "回归"
                                 ),
+                                "_data_hash": adv_file_hash,
                             }
                         except Exception as ml_error:
                             st.error(
@@ -6193,13 +7057,13 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                         ml_stored = st.session_state["ml_data"]
 
                         st.write("测试集评估指标")
-                        st.dataframe(
+                        _st_dataframe(
                             ml_stored["metrics"],
                             use_container_width=True,
                         )
 
                         st.write("特征重要性")
-                        st.dataframe(
+                        _st_dataframe(
                             ml_stored["importance"],
                             use_container_width=True,
                         )
@@ -6219,7 +7083,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                         )
                         ax_imp.invert_yaxis()
                         ax_imp.set_title("特征重要性")
-                        st.pyplot(fig_imp)
+                        show_fig(fig_imp)
                         plt.close(fig_imp)
 
                         top_feat = ml_stored["importance"].iloc[0]
@@ -6284,12 +7148,38 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
 
                         boot_results = []
 
+                        # 修复：使用固定随机种子保证结果可复现；
+                        # 混合效应模型存在分组结构时按“组”重抽样，保留组内相关性。
+                        boot_rng = np.random.default_rng(42)
+                        group_ids = None
+
+                        if groups_adv is not None and (
+                            groups_adv.nunique() < len(groups_adv)
+                        ):
+                            group_ids = groups_adv
+
                         for _ in range(int(n_boot)):
-                            idx = np.random.default_rng().integers(
-                                0,
-                                len(y_adv),
-                                size=len(y_adv),
-                            )
+                            if group_ids is None:
+                                idx = boot_rng.integers(
+                                    0,
+                                    len(y_adv),
+                                    size=len(y_adv),
+                                )
+                            else:
+                                # 按组重抽样：随机抽取组（有放回），
+                                # 组内观测全部保留。
+                                unique_groups = group_ids.unique()
+                                sampled_groups = boot_rng.choice(
+                                    unique_groups,
+                                    size=len(unique_groups),
+                                    replace=True,
+                                )
+                                idx = np.concatenate(
+                                    [
+                                        np.where(group_ids == g)[0]
+                                        for g in sampled_groups
+                                    ]
+                                )
 
                             y_b = y_adv.iloc[idx].reset_index(drop=True)
                             X_b = X_adv.iloc[idx].reset_index(drop=True)
@@ -6346,7 +7236,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                             f"Bootstrap（{len(boot_results)}次有效重抽样）"
                             "95%系数置信区间"
                         )
-                        st.dataframe(
+                        _st_dataframe(
                             boot_table,
                             use_container_width=True,
                         )
@@ -6381,6 +7271,12 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
     # ============================================================
 
     st.subheader("📑 一键导出综合报告")
+
+    # 引导进度：已进入第 8 步（导出报告）
+    st.session_state["guide_step"] = max(
+        st.session_state.get("guide_step", 0),
+        8,
+    )
 
     def _get_var(name):
         """从当前作用域安全获取变量，避免未定义报错。"""
@@ -6419,6 +7315,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
             from docx.shared import Pt
             from docx.oxml.ns import qn
             from docx.enum.text import WD_ALIGN_PARAGRAPH
+            import io as _io
 
             doc = Document()
             style = doc.styles['Normal']
@@ -6447,7 +7344,32 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                 else:
                     doc.add_paragraph(str(content))
 
-            import io as _io
+            # 修复：将本会话生成的所有可视化图表一并嵌入报告
+            if _REPORT_FIGURES:
+                from docx.shared import Inches
+
+                doc.add_heading('可视化图表', level=2)
+
+                for fig_index, fig in enumerate(_REPORT_FIGURES, start=1):
+                    try:
+                        fig_buffer = _io.BytesIO()
+                        fig.savefig(
+                            fig_buffer,
+                            format="png",
+                            dpi=120,
+                            bbox_inches="tight",
+                        )
+                        fig_buffer.seek(0)
+                        doc.add_picture(
+                            fig_buffer,
+                            width=Inches(6.0),
+                        )
+                        doc.add_paragraph(
+                            f"图{fig_index}"
+                        )
+                    except Exception:
+                        continue
+
             buffer = _io.BytesIO()
             doc.save(buffer)
             doc_bytes = buffer.getvalue()
@@ -6467,7 +7389,7 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
 
 
     # ============================================================
-    # 二十一、使用注意事项
+    # 二十三、使用注意事项
     # ============================================================
 
     with st.expander(
@@ -6580,7 +7502,7 @@ else:  # 优化求解模块
     st.write("**决策变量统计信息**")
     try:
         stats_df = opt_df[var_cols].describe().T.reset_index()
-        st.dataframe(stats_df, use_container_width=True)
+        _st_dataframe(stats_df, use_container_width=True)
     except Exception:
         pass
 
@@ -6716,19 +7638,79 @@ else:  # 优化求解模块
             try:
                 from scipy.optimize import minimize, differential_evolution
 
+                # 修复：不再直接 eval 用户输入（存在任意代码执行风险）。
+                # 改为：AST 节点白名单校验 + 受限命名空间（不注入 __builtins__）。
+                _SAFE_NS = {
+                    "np": np,
+                    "abs": abs,
+                    "exp": np.exp,
+                    "log": np.log,
+                    "log10": np.log10,
+                    "sqrt": np.sqrt,
+                    "sin": np.sin,
+                    "cos": np.cos,
+                    "tan": np.tan,
+                    "min": min,
+                    "max": max,
+                    "pi": np.pi,
+                    "e": np.e,
+                }
+
+                _ALLOWED_EXPR_NODES = (
+                    ast.Expression,
+                    ast.BinOp,
+                    ast.UnaryOp,
+                    ast.Name,
+                    ast.Load,
+                    ast.Constant,
+                    ast.Add,
+                    ast.Sub,
+                    ast.Mult,
+                    ast.Div,
+                    ast.Pow,
+                    ast.Mod,
+                    ast.FloorDiv,
+                    ast.USub,
+                    ast.UAdd,
+                    ast.Call,
+                    ast.Attribute,
+                    ast.List,
+                    ast.Tuple,
+                    ast.Subscript,
+                )
+
+                def _safe_compile_expr(expr_str):
+                    """把用户表达式编译为 lambda x 函数（带语法白名单校验）。"""
+                    try:
+                        tree = ast.parse(
+                            "lambda x: " + expr_str,
+                            mode="eval",
+                        )
+                    except SyntaxError as exc:
+                        raise ValueError(
+                            f"表达式语法错误：{exc}"
+                        )
+
+                    for node in ast.walk(tree):
+                        if type(node) not in _ALLOWED_EXPR_NODES:
+                            raise ValueError(
+                                "表达式包含不允许的语法："
+                                f"{type(node).__name__}"
+                            )
+
+                    return eval(
+                        compile(tree, "<expr>", "eval"),
+                        {"__builtins__": {}},
+                        _SAFE_NS,
+                    )
+
                 def _make_nlp_con(expr_str):
                     """把约束表达式字符串编译为函数，支持 abs()。"""
-                    return eval(
-                        "lambda x: " + expr_str,
-                        {"np": np, "abs": np.abs},
-                    )
+                    return _safe_compile_expr(expr_str)
 
                 def _make_nlp_obj(expr_str):
                     """把目标函数表达式字符串编译为函数。"""
-                    return eval(
-                        "lambda x: " + expr_str,
-                        {"np": np, "abs": np.abs},
-                    )
+                    return _safe_compile_expr(expr_str)
 
                 nonlinear_obj = _make_nlp_obj(nonlinear_obj_str)
                 nonlinear_cons = []
@@ -6892,127 +7874,134 @@ else:  # 优化求解模块
             except Exception as e:
                 st.error(f"求解错误：{e}")
         else:
+            # ---------------- 线性 / 整数线性 / 0-1 规划求解 ----------------
+            # 修复：线性求解代码原本缩进错误、位于 if/else 之外，
+            # 导致非线性求解后必然访问未定义的 A_ub 而崩溃。
+            # 现已整体移入 else 分支，只在“线性类”求解时执行。
             A_ub, b_ub, A_eq, b_eq = [], [], [], []
-        for cons in st.session_state.cons_list:
-            coeffs = cons["coeffs"]
-            sign = cons["sign"]
-            rhs = cons["rhs"]
-            if sign == "<=":
-                A_ub.append(coeffs); b_ub.append(rhs)
-            elif sign == ">=":
-                A_ub.append([-c for c in coeffs]); b_ub.append(-rhs)
-            else:
-                A_eq.append(coeffs); b_eq.append(rhs)
-        c = np.array(obj_coeffs)
-        if maximize:
-            c = -c
 
-        # 转换为 numpy 数组
-        A_ub = np.array(A_ub) if A_ub else None
-        b_ub = np.array(b_ub) if b_ub else None
-        A_eq = np.array(A_eq) if A_eq else None
-        b_eq = np.array(b_eq) if b_eq else None
+            for cons in st.session_state.cons_list:
+                coeffs = cons["coeffs"]
+                sign = cons["sign"]
+                rhs = cons["rhs"]
+                if sign == "<=":
+                    A_ub.append(coeffs); b_ub.append(rhs)
+                elif sign == ">=":
+                    A_ub.append([-c for c in coeffs]); b_ub.append(-rhs)
+                else:
+                    A_eq.append(coeffs); b_eq.append(rhs)
+            c = np.array(obj_coeffs)
+            if maximize:
+                c = -c
 
-        try:
-            if integrality is not None and any(integrality):
-                from scipy.optimize import milp, LinearConstraint, Bounds
-                cons = []
-                if A_ub is not None:
-                    cons.append(LinearConstraint(A_ub, -np.inf, b_ub))
-                if A_eq is not None:
-                    cons.append(LinearConstraint(A_eq, b_eq, b_eq))
-                lb = [b[0] if b[0] is not None else -np.inf for b in bounds]
-                ub = [b[1] if b[1] is not None else np.inf for b in bounds]
-                res = milp(c=c, constraints=cons, bounds=Bounds(lb, ub), integrality=integrality)
-            else:
-                res = linprog(c, A_ub=A_ub, b_ub=b_ub, A_eq=A_eq, b_eq=b_eq, bounds=bounds, method='highs')
+            # 转换为 numpy 数组
+            A_ub = np.array(A_ub) if A_ub else None
+            b_ub = np.array(b_ub) if b_ub else None
+            A_eq = np.array(A_eq) if A_eq else None
+            b_eq = np.array(b_eq) if b_eq else None
 
-            if res.success:
-                opt_x = res.x
-                opt_val = -res.fun if maximize else res.fun
-                st.success("✅ 求解成功！")
-                st.write("**最优解：**")
-                st.json({var_cols[i]: float(opt_x[i]) for i in range(n_vars)})
-                st.write(f"**最优值：** {opt_val:.6f}")
+            try:
+                if integrality is not None and any(integrality):
+                    from scipy.optimize import milp, LinearConstraint, Bounds
+                    cons = []
+                    if A_ub is not None:
+                        cons.append(LinearConstraint(A_ub, -np.inf, b_ub))
+                    if A_eq is not None:
+                        cons.append(LinearConstraint(A_eq, b_eq, b_eq))
+                    lb = [b[0] if b[0] is not None else -np.inf for b in bounds]
+                    ub = [b[1] if b[1] is not None else np.inf for b in bounds]
+                    res = milp(c=c, constraints=cons, bounds=Bounds(lb, ub), integrality=integrality)
+                else:
+                    res = linprog(c, A_ub=A_ub, b_ub=b_ub, A_eq=A_eq, b_eq=b_eq, bounds=bounds, method='highs')
 
-                opt_solution_df = pd.DataFrame(
-                    {
-                        "变量": var_cols,
-                        "最优解": [float(v) for v in opt_x],
-                    }
-                )
-                opt_solution_df.loc[len(opt_solution_df)] = [
-                    "最优值",
-                    float(opt_val),
-                ]
+                if res.success:
+                    opt_x = res.x
+                    opt_val = -res.fun if maximize else res.fun
+                    st.success("✅ 求解成功！")
+                    st.write("**最优解：**")
+                    st.json({var_cols[i]: float(opt_x[i]) for i in range(n_vars)})
+                    st.write(f"**最优值：** {opt_val:.6f}")
 
-                dataframe_download(
-                    opt_solution_df,
-                    "优化结果.csv",
-                    key="download_linear_opt_result",
-                )
+                    opt_solution_df = pd.DataFrame(
+                        {
+                            "变量": var_cols,
+                            "最优解": [float(v) for v in opt_x],
+                        }
+                    )
+                    opt_solution_df.loc[len(opt_solution_df)] = [
+                        "最优值",
+                        float(opt_val),
+                    ]
 
-                st.text_area(
-                    "论文表述",
-                    (
-                        f"采用{opt_type}对上述问题进行求解，"
-                        f"目标函数的最优值为 {opt_val:.6f}，"
-                        f"对应的最优决策变量取值为："
-                        + "，".join(
-                            f"{var_cols[i]} = {float(opt_x[i]):.6f}"
-                            for i in range(n_vars)
-                        )
-                        + "。"
-                    ),
-                    height=120,
-                    key="linear_text_area",
-                )
+                    dataframe_download(
+                        opt_solution_df,
+                        "优化结果.csv",
+                        key="download_linear_opt_result",
+                    )
 
-                if opt_type == "线性规划 (LP)":
-                
-                    # 简单敏感性分析f
-                    st.subheader("影子价格近似")
-                    for idx, constraint_item in enumerate(
-                        st.session_state.cons_list
-                    ):
-                        coeffs = constraint_item["coeffs"]
-                        sign = constraint_item["sign"]
-                        rhs = constraint_item["rhs"]
+                    st.text_area(
+                        "论文表述",
+                        (
+                            f"采用{opt_type}对上述问题进行求解，"
+                            f"目标函数的最优值为 {opt_val:.6f}，"
+                            f"对应的最优决策变量取值为："
+                            + "，".join(
+                                f"{var_cols[i]} = {float(opt_x[i]):.6f}"
+                                for i in range(n_vars)
+                            )
+                            + "。"
+                        ),
+                        height=120,
+                        key="linear_text_area",
+                    )
 
-                        delta = 0.01 * max(abs(rhs), 1.0)
-                        # 重新求解扰动后问题
-                        t_A_ub, t_b_ub, t_A_eq, t_b_eq = [], [], [], []
-                        for j, constraint_j in enumerate(
+                    if opt_type == "线性规划 (LP)":
+
+                        # 简单敏感性分析
+                        st.subheader("影子价格近似")
+                        for idx, constraint_item in enumerate(
                             st.session_state.cons_list
                         ):
-                            coeffs_j = constraint_j["coeffs"]
-                            sign_j = constraint_j["sign"]
-                            rhs_j = constraint_j["rhs"]
+                            coeffs = constraint_item["coeffs"]
+                            sign = constraint_item["sign"]
+                            rhs = constraint_item["rhs"]
 
-                            if j == idx:
-                                rhs_j += delta
-                            if sign_j == "<=":
-                                t_A_ub.append(coeffs_j); t_b_ub.append(rhs_j)
-                            elif sign_j == ">=":
-                                t_A_ub.append([-c for c in coeffs_j]); t_b_ub.append(-rhs_j)
-                            else:
-                                t_A_eq.append(coeffs_j); t_b_eq.append(rhs_j)
-                        try:
-                            t_A_ub = np.array(t_A_ub) if t_A_ub else None
-                            t_b_ub = np.array(t_b_ub) if t_b_ub else None
-                            t_A_eq = np.array(t_A_eq) if t_A_eq else None
-                            t_b_eq = np.array(t_b_eq) if t_b_eq else None
-                            res2 = linprog(c, A_ub=t_A_ub, b_ub=t_b_ub, A_eq=t_A_eq, b_eq=t_b_eq, bounds=bounds, method='highs')
-                            if res2.success:
-                                pval = -res2.fun if maximize else res2.fun
-                                shadow = (pval - opt_val) / delta
-                                st.write(f"约束 {idx+1}: 影子价格 ≈ {shadow:.6f}")
-                        except:
-                            pass
-            else:
-                st.error(f"求解失败：{res.message}")
-        except Exception as e:
-            st.error(f"求解错误：{e}")
+                            delta = 0.01 * max(abs(rhs), 1.0)
+                            # 重新求解扰动后问题
+                            t_A_ub, t_b_ub, t_A_eq, t_b_eq = [], [], [], []
+                            for j, constraint_j in enumerate(
+                                st.session_state.cons_list
+                            ):
+                                coeffs_j = constraint_j["coeffs"]
+                                sign_j = constraint_j["sign"]
+                                rhs_j = constraint_j["rhs"]
+
+                                if j == idx:
+                                    rhs_j += delta
+                                if sign_j == "<=":
+                                    t_A_ub.append(coeffs_j); t_b_ub.append(rhs_j)
+                                elif sign_j == ">=":
+                                    t_A_ub.append([-c for c in coeffs_j]); t_b_ub.append(-rhs_j)
+                                else:
+                                    t_A_eq.append(coeffs_j); t_b_eq.append(rhs_j)
+                            try:
+                                t_A_ub = np.array(t_A_ub) if t_A_ub else None
+                                t_b_ub = np.array(t_b_ub) if t_b_ub else None
+                                t_A_eq = np.array(t_A_eq) if t_A_eq else None
+                                t_b_eq = np.array(t_b_eq) if t_b_eq else None
+                                res2 = linprog(c, A_ub=t_A_ub, b_ub=t_b_ub, A_eq=t_A_eq, b_eq=t_b_eq, bounds=bounds, method='highs')
+                                if res2.success:
+                                    pval = -res2.fun if maximize else res2.fun
+                                    shadow = (pval - opt_val) / delta
+                                    st.write(f"约束 {idx+1}: 影子价格 ≈ {shadow:.6f}")
+                            except Exception as exc:
+                                st.warning(
+                                    f"约束 {idx+1} 影子价格计算失败：{exc}"
+                                )
+                else:
+                    st.error(f"求解失败：{res.message}")
+            except Exception as e:
+                st.error(f"求解错误：{e}")
 
     # 以下优化代码结束
 
@@ -7022,8 +8011,6 @@ else:  # 优化求解模块
 # 如果不想显示，直接删除本模块即可。
 
 try:
-    import hashlib
-
     EASTER_EGG_QUOTES = [
         "模型不会自动变好，但数据清洗后通常会更诚实。",
         "相关性可以一起散步，但不代表它们互相导致。",
