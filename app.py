@@ -81,6 +81,10 @@ if "opt_uploaded_file" not in st.session_state:
     st.session_state.opt_uploaded_file = None
 if "app_mode" not in st.session_state:
     st.session_state.app_mode = "数据分析"
+if "welcome_seen" not in st.session_state:
+    st.session_state.welcome_seen = False
+if "guide_step" not in st.session_state:
+    st.session_state.guide_step = 0
     
 
 # ===== 页面背景图片 =====
@@ -436,10 +440,12 @@ def dataframe_download(df, filename, key=None):
     if not isinstance(df, pd.DataFrame):
         df = pd.DataFrame(df)
 
+    # 修复：to_csv(encoding="utf-8-sig") 已输出带 BOM 的字节串，
+    # 再 encode("utf-8-sig") 会写入双重 BOM，此处统一用 utf-8。
     data = df.to_csv(
         index=False,
         encoding="utf-8-sig",
-    ).encode("utf-8-sig")
+    ).encode("utf-8")
 
     download_key = key or f"download_{filename}"
 
@@ -499,8 +505,12 @@ def show_fig(fig, name=None):
             mime="image/png",
             key=f"dl_fig_{name}",
         )
-    except Exception:
-        pass
+    except Exception as _fig_save_error:
+        # 修复：不再静默吞掉异常，给出可见提示
+        st.warning(
+            f"图表「{name}」的下载按钮生成失败（不影响展示）："
+            f"{_fig_save_error}"
+        )
 
     _REPORT_FIGURES.append(fig)
 
@@ -516,41 +526,65 @@ GUIDE_STEPS = [
         "key": "problem",
         "title": "① 上传赛题（可选）",
         "desc": "上传 PDF/Word/TXT 赛题文件，或直接粘贴赛题原文，点击“自动检测题型”。",
+        "when": "拿到赛题的第一时间。让工具自动识别题型，从而推荐对应的分析路径。",
+        "how": "上传 PDF / Word / TXT，或直接把赛题文字粘贴到文本框，然后点击“自动检测题型”。",
+        "output": "题型判断结果（评价/预测/优化/机理/分类）+ 该题型的推荐流程。",
     },
     {
         "key": "data",
         "title": "② 上传数据表",
         "desc": "上传 CSV / Excel 数据表。没有现成数据？点“下载示例数据”立刻体验全流程。",
+        "when": "赛题提供了数据文件时。如果没有数据，先下载示例数据把流程走通，再思考怎么造/采集数据。",
+        "how": "CSV / Excel 直接上传即可。注意列名要规范：无空格、无重复，程序会自动清洗列名。",
+        "output": "数据概览：行数、列数、缺失单元格数、重复行数。",
     },
     {
         "key": "vars",
         "title": "③ 选择因变量与自变量",
         "desc": "因变量是你要预测/解释的结果（如销量、评分），自变量是可能影响它的因素。",
+        "when": "读题后明确“要预测/解释什么”（因变量）、“用什么解释它”（自变量）后。",
+        "how": "因变量只能选 1 个；自变量可多选。ID 列（序号、学号等）会被自动排除，不要手动选入。",
+        "output": "变量组合——决定了后续所有分析和模型。",
     },
     {
         "key": "types",
         "title": "④ 确认变量类型",
         "desc": "程序自动识别类型，请按变量真实含义确认：连续（数值）、分类（类别）、时间、次数（计数）。",
+        "when": "每次更换数据或变量都要核对一遍。自动识别仅供参考，务必人工确认。",
+        "how": "连续=可带小数的数值；分类=类别文字或 0/1；时间=日期；次数=非负整数（如促销次数）。",
+        "output": "正确的变量类型——直接决定自动推荐什么模型。",
     },
     {
         "key": "clean",
         "title": "⑤ 数据清洗",
         "desc": "处理缺失值与异常值。左侧可切换“分类型处理”或“删除含缺失值的行”。",
+        "when": "数据存在缺失值或异常值时必做（赛题数据通常都有）。",
+        "how": "缺失值推荐“分类型处理”或“KNN插补”；异常值先用“仅标记，不删除”看数量和分布，再决定是否删除。",
+        "output": "清洗汇总报告 + 可直接复制进论文的数据清洗表述。",
     },
     {
         "key": "model",
         "title": "⑥ 建模与诊断",
         "desc": "程序自动推荐模型，选择后点击“开始拟合最终模型”，查看指标、系数和诊断图。",
+        "when": "完成清洗、确认变量类型后，这就是核心一步。",
+        "how": "采用程序推荐的模型（或展开“多模型对比”选 AIC 更小的），点击“开始拟合最终模型”。",
+        "output": "模型指标表、系数表（含显著性）、LaTeX 三线表、残差诊断图、预测区间。",
     },
     {
         "key": "adv",
         "title": "⑦ 高级分析（可选）",
         "desc": "熵权TOPSIS、灰色预测、ARIMA、聚类、PCA、随机森林等，按赛题类型选用。",
+        "when": "按题型选用：评价类→熵权TOPSIS/PCA；预测类→灰色预测/ARIMA；分类类→随机森林；其他→稳健性分析。",
+        "how": "在“8.5 高级分析方法”中按题型选择对应 Tab，每个 Tab 顶部都有使用说明和论文表述。",
+        "output": "补充图表和结论，是论文的加分项。",
     },
     {
         "key": "report",
         "title": "⑧ 导出报告",
         "desc": "一键导出 Word 综合报告，论文表述草稿可直接复制进论文。",
+        "when": "全部分析完成后、写论文之前。",
+        "how": "点击“📑 一键导出综合报告”生成 Word；各环节的“论文表述”文本可直接复制粘贴。",
+        "output": "综合报告.docx + 各环节 CSV 中间结果 + 图表 PNG。",
     },
 ]
 
@@ -584,7 +618,57 @@ def make_sample_data_csv():
     df.loc[0, "客流量"] = 9500.0
     df.loc[1, "广告费"] = 300.0
 
-    return df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+    return df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8")
+
+
+def _update_guide_progress():
+    """根据任务清单勾选状态，重算当前进行到的步骤。"""
+    done_steps = []
+
+    for index, step in enumerate(GUIDE_STEPS, start=1):
+        if st.session_state.get(
+            f"check_guide_{step['key']}",
+            False,
+        ):
+            done_steps.append(index)
+        else:
+            break
+
+    st.session_state["guide_step"] = (
+        max(done_steps) if done_steps else 0
+    )
+
+
+def render_mission_checklist(step_index):
+    """侧边栏任务清单：手动勾选与自动进度互通。"""
+    st.markdown("### ✅ 我的任务清单")
+
+    for index, step in enumerate(GUIDE_STEPS, start=1):
+        st.checkbox(
+            step["title"],
+            value=st.session_state.get(
+                f"check_guide_{step['key']}",
+                index < step_index,
+            ),
+            key=f"check_guide_{step['key']}",
+            on_change=_update_guide_progress,
+        )
+
+    st.caption(
+        "跟着序号从上往下做。每完成一步就勾选，"
+        "工具会记住你的进度。"
+    )
+
+    if st.button(
+        "🔄 按当前自动进度同步勾选",
+        key="sync_guide_button",
+    ):
+        for index, step in enumerate(GUIDE_STEPS, start=1):
+            st.session_state[
+                f"check_guide_{step['key']}"
+            ] = index < step_index
+
+        st.rerun()
 
 
 def render_guide_panel(step_index):
@@ -595,6 +679,20 @@ def render_guide_panel(step_index):
     st.markdown("---")
     st.markdown("### 🧭 新手使用向导")
 
+    # 总体进度条
+    progress_value = (
+        min(max(step_index, 0), len(GUIDE_STEPS))
+        / len(GUIDE_STEPS)
+    )
+
+    try:
+        st.progress(
+            progress_value,
+            text=f"总进度 {step_index}/{len(GUIDE_STEPS)}",
+        )
+    except TypeError:
+        st.progress(progress_value)
+
     for i, step in enumerate(GUIDE_STEPS, start=1):
         if i < step_index:
             st.markdown(f"✅ **{step['title']}**")
@@ -603,10 +701,17 @@ def render_guide_panel(step_index):
         else:
             st.markdown(f"⭕ {step['title']}")
 
-    current = GUIDE_STEPS[min(max(step_index, 1), 8) - 1]
+    current = GUIDE_STEPS[
+        min(max(step_index, 1), len(GUIDE_STEPS)) - 1
+    ]
 
-    with st.expander("💡 当前这一步怎么做？", expanded=step_index > 0):
-        st.markdown(current["desc"])
+    with st.expander(
+        "💡 当前这一步怎么做？",
+        expanded=step_index > 0,
+    ):
+        st.markdown(f"**什么时候做：** {current['when']}")
+        st.markdown(f"**怎么做：** {current['how']}")
+        st.markdown(f"**做完得到什么：** {current['output']}")
 
     st.markdown(
         "**没有现成数据？** 点击下方按钮下载一份示例数据，"
@@ -636,6 +741,62 @@ if 0 < _guide_step_now <= len(GUIDE_STEPS):
     )
 
 # ===== 新手进度横幅结束 =====
+
+
+# ===== 新手总览：拿到赛题后做什么（主区域） =====
+
+_welcome_seen = st.session_state.get("welcome_seen", False)
+
+with st.expander(
+    "🚀 新手总览：拿到赛题后，怎么用这个工具？",
+    expanded=not _welcome_seen,
+):
+    st.markdown(
+        "数学建模赛题千变万化，但拿到题目后你只需要记住 **四步走**："
+        "**读懂赛题 → 准备数据 → 建模分析 → 撰写论文**。"
+        "本工具的 8 个步骤正是按这个顺序设计的："
+    )
+
+    st.markdown(
+        """
+        <div style="display:flex; flex-wrap:wrap; gap:8px; margin:8px 0;">
+            <div style="flex:1; min-width:110px; padding:8px; border-radius:8px;
+                        background:rgba(70,130,180,0.12); border:1px solid rgba(100,140,180,0.3);">
+                <b>① 读题</b><br><span style="font-size:13px;">上传赛题，自动识别题型</span>
+            </div>
+            <div style="flex:1; min-width:110px; padding:8px; border-radius:8px;
+                        background:rgba(70,130,180,0.12); border:1px solid rgba(100,140,180,0.3);">
+                <b>② 数据</b><br><span style="font-size:13px;">上传数据 → 选变量 → 清洗</span>
+            </div>
+            <div style="flex:1; min-width:110px; padding:8px; border-radius:8px;
+                        background:rgba(120,160,200,0.15); border:1px solid rgba(100,140,180,0.3);">
+                <b>③ 建模</b><br><span style="font-size:13px;">推荐模型 → 拟合 → 诊断</span>
+            </div>
+            <div style="flex:1; min-width:110px; padding:8px; border-radius:8px;
+                        background:rgba(120,160,200,0.15); border:1px solid rgba(100,140,180,0.3);">
+                <b>④ 论文</b><br><span style="font-size:13px;">复制表述 → 导出报告</span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        "**三个原则：**\n\n"
+        "1. **不用把所有功能都用一遍** —— 跟着左侧向导的步骤序号走即可；\n"
+        "2. **先读题再动手** —— 先做第①步识别题型，工具会告诉你这类题该用哪些功能；\n"
+        "3. **每步都有论文素材** —— 数据清洗、描述统计、模型假设等环节"
+        "都提供了可直接复制进论文的表述。"
+    )
+
+    _welcome_ack = st.checkbox(
+        "已了解，下次打开不再自动展开",
+        value=_welcome_seen,
+        key="welcome_seen_checkbox",
+    )
+    st.session_state["welcome_seen"] = _welcome_ack
+
+# ===== 新手总览结束 =====
 
 
 def safe_numeric(series):
@@ -978,6 +1139,65 @@ def multi_label_classify_problem_text(problem_text):
     }
 
 
+# ===== 按题型给出的推荐工作流（新手引导用） =====
+
+PROBLEM_PATH_GUIDES = {
+    "评价类": [
+        ("明确评价对象与指标", "每一行是一个被评价对象（如城市/方案），每一列是一个指标；先想清楚这两件事。"),
+        ("确认指标方向", "在「熵权法+TOPSIS」里逐个设置指标方向：越大越好=正向，越小越好=负向。"),
+        ("熵权法确定权重", "切到高级分析的「熵权法+TOPSIS」Tab，程序自动给出客观权重（哪个指标区分度最高）。"),
+        ("TOPSIS 排序", "得到各对象的综合得分与排名，这就是评价类题目的核心结果。"),
+        ("稳健性补充", "指标较多时可先用 PCA 看信息结构；或换等权重对比排名是否明显变化。"),
+    ],
+    "预测类": [
+        ("先看走势", "在「6. 数据可视化」里画因变量-自变量散点/曲线图，判断趋势、波动和季节性。"),
+        ("判断序列长度", "序列 ≥30 期优先用 ARIMA；4~30 期用「灰色预测 GM(1,1)」。"),
+        ("回归建模", "若还有多个解释变量，先走主流程完成回归建模（第⑥步）。"),
+        ("交叉验证", "用「K-Fold 交叉验证」评估预测的稳定性，避免单次划分的偶然性。"),
+        ("给出预测区间", "模型结果表的“预测区间”可用于论文：报告预测值的同时给出区间。"),
+    ],
+    "优化类": [
+        ("明确决策变量", "先想清楚“要决定什么”（如产量、采购量、排班人数），这些就是决策变量。"),
+        ("写目标函数", "是最大化利润/产量，还是最小化成本/时间？在右侧输入目标系数或表达式。"),
+        ("逐条加约束", "资源限制、需求限制、上下限等逐条添加，注意系数个数与变量数一致。"),
+        ("选求解器", "线性问题用「线性规划/整数线性规划」；非线性问题用「NLP(SLSQP)」或「遗传算法」。"),
+        ("敏感性分析", "LP 求解后查看“影子价格”，讨论哪个约束最紧、放宽哪个约束最划算。"),
+    ],
+    "机理分析类": [
+        ("识别核心变量", "找出随时间/空间变化的量及其相互关系（如浓度、温度、种群数量）。"),
+        ("建立方程结构", "根据机理写出微分方程/动力学方程（本工具未内置方程求解，建议先手动推导）。"),
+        ("用数据校验参数", "将离散化数据与本工具「回归建模」结合，估计模型参数。"),
+        ("稳健性与灵敏度", "用「稳健性分析（Bootstrap）」检验参数区间是否包含 0、结论是否稳定。"),
+    ],
+    "分类类": [
+        ("判断分类任务", "因变量类别数=2 用「二项Logistic回归」；>2 用「多项Logistic回归」。"),
+        ("检查类别平衡", "看各类别样本数：某类过少（如<10）时模型和评估会不稳定。"),
+        ("建模与混淆矩阵", "拟合后重点看：准确率、F1、ROC-AUC（不要只看准确率）。"),
+        ("机器学习补充", "高级分析里的「随机森林/决策树」可对比结果，并输出特征重要性。"),
+    ],
+    "未识别": [
+        ("先识别题型", "如果系统没能识别题型，手动在“赛题类型”输入框里填写（如：预测类）。"),
+        ("走通基础流程", "按左侧 8 步流程：上传数据 → 选变量 → 确认类型 → 清洗 → 建模。"),
+        ("不知道用哪个功能？", "回到左侧「新手使用向导」，展开“当前这一步怎么做”查看说明。"),
+    ],
+}
+
+
+def render_problem_path_guide(main_type):
+    """渲染针对某题型的推荐工作流。"""
+    steps = PROBLEM_PATH_GUIDES.get(
+        main_type,
+        PROBLEM_PATH_GUIDES["未识别"],
+    )
+
+    st.markdown(
+        f"**针对「{main_type}」赛题，建议按以下顺序做：**"
+    )
+
+    for index, (title, desc) in enumerate(steps, start=1):
+        st.markdown(f"**{index}. {title}**  \n{desc}")
+
+
 # ============================================================
 # 六、变量识别和数据处理
 # ============================================================
@@ -1075,11 +1295,13 @@ def classify_variable(series):
 
     is_nonnegative = (values >= 0).all()
 
+    # 修复：原判定要求 max>=5，导致 0~4 的小计数变量（如促销次数）
+    # 被误判为“连续”，进而影响模型推荐（不会推荐 Poisson/负二项）。
+    # 改为：非负整数且取值基数较小（<=12）即判定为“次数”。
     if (
         is_integer
         and is_nonnegative
-        and unique_count <= 20
-        and values.max() >= 5
+        and unique_count <= 12
     ):
         return "次数"
 
@@ -1166,6 +1388,138 @@ def convert_types(df, variable_types):
     return result
 
 
+def _fill_missing_knn(result, variable_types):
+    """KNN 插补：数值列用距离加权 KNN，分类/时间列用众数/前后填充。"""
+    from sklearn.impute import KNNImputer
+
+    report_rows = []
+    imputed_cells = 0
+    deleted_rows = 0
+
+    num_cols = [
+        col
+        for col, var_type in variable_types.items()
+        if var_type in ["连续", "次数"]
+        and col in result.columns
+    ]
+    other_cols = [
+        col
+        for col in variable_types
+        if col not in num_cols and col in result.columns
+    ]
+
+    def _row(col, before, treatment, actual, after):
+        return {
+            "变量": col,
+            "原始缺失数": before,
+            "处理方式": treatment,
+            "实际插补数": actual,
+            "剩余缺失数": after,
+        }
+
+    # 1) 分类 / 时间列：众数 / 前后向填充
+    for col in other_cols:
+        before = int(result[col].isna().sum())
+
+        if before == 0:
+            report_rows.append(_row(col, 0, "无缺失", 0, 0))
+            continue
+
+        if variable_types[col] == "时间":
+            result[col] = result[col].ffill().bfill()
+            treatment = "前向填充+后向填充"
+        else:
+            mode = result[col].mode(dropna=True)
+
+            if len(mode) > 0:
+                result[col] = result[col].fillna(mode.iloc[0])
+
+            treatment = "众数填补"
+
+        after = int(result[col].isna().sum())
+        actual_imputed = max(0, before - after)
+        imputed_cells += actual_imputed
+        report_rows.append(
+            _row(col, before, treatment, actual_imputed, after)
+        )
+
+    # 2) 数值列：KNN 插补（距离加权）
+    if num_cols:
+        try:
+            n_est = max(2, min(5, len(result)))
+            imputer = KNNImputer(
+                n_neighbors=n_est,
+                weights="distance",
+            )
+            num_matrix = result[num_cols].astype(float)
+            imputed_values = imputer.fit_transform(num_matrix)
+
+            for index, col in enumerate(num_cols):
+                before = int(result[col].isna().sum())
+
+                if before == 0:
+                    report_rows.append(_row(col, 0, "无缺失", 0, 0))
+                    continue
+
+                result[col] = imputed_values[:, index]
+
+                if variable_types[col] == "次数":
+                    result[col] = result[col].round()
+
+                after = int(result[col].isna().sum())
+                actual_imputed = max(0, before - after)
+                imputed_cells += actual_imputed
+                treatment = (
+                    "KNN插补（距离加权，取整）"
+                    if variable_types[col] == "次数"
+                    else "KNN插补（距离加权）"
+                )
+                report_rows.append(
+                    _row(col, before, treatment, actual_imputed, after)
+                )
+        except Exception:
+            # KNN 失败（如全 NaN 列）时回退为线性插值+中位数
+            for col in num_cols:
+                before = int(result[col].isna().sum())
+
+                if before == 0:
+                    report_rows.append(_row(col, 0, "无缺失", 0, 0))
+                    continue
+
+                result[col] = result[col].interpolate(
+                    method="linear",
+                    limit_direction="both",
+                )
+
+                median_value = result[col].median()
+
+                if pd.notna(median_value):
+                    result[col] = result[col].fillna(median_value)
+
+                if variable_types[col] == "次数":
+                    result[col] = result[col].round()
+
+                after = int(result[col].isna().sum())
+                actual_imputed = max(0, before - after)
+                imputed_cells += actual_imputed
+                report_rows.append(
+                    _row(
+                        col,
+                        before,
+                        "KNN失败回退：线性插值+中位数",
+                        actual_imputed,
+                        after,
+                    )
+                )
+
+    return (
+        result,
+        pd.DataFrame(report_rows),
+        deleted_rows,
+        imputed_cells,
+    )
+
+
 def fill_missing_values(
     df,
     variable_types,
@@ -1188,6 +1542,9 @@ def fill_missing_values(
             0,
             0,
         )
+
+    if method == "KNN插补":
+        return _fill_missing_knn(result, variable_types)
 
     if method == "删除含缺失值的行":
         missing_mask = result[
@@ -1314,7 +1671,8 @@ def detect_outliers(
 
         if method == "3σ":
             mean_value = values.mean()
-            std_value = values.std()
+            # 修复：3σ 法则使用总体标准差（ddof=0）
+            std_value = values.std(ddof=0)
 
             if (
                 pd.isna(std_value)
@@ -1351,6 +1709,31 @@ def detect_outliers(
                     ~values.between(
                         lower,
                         upper,
+                    )
+                    & values.notna()
+                )
+
+        elif method == "MAD":
+            # 中位数绝对偏差法：对偏态数据更稳健
+            median_value = values.median()
+            mad_value = np.median(
+                np.abs(values - median_value)
+            )
+
+            if (
+                pd.isna(mad_value)
+                or mad_value == 0
+            ):
+                mask = pd.Series(
+                    False,
+                    index=result.index,
+                )
+            else:
+                mad_threshold = 3 * 1.4826 * mad_value
+                mask = (
+                    ~values.between(
+                        median_value - mad_threshold,
+                        median_value + mad_threshold,
                     )
                     & values.notna()
                 )
@@ -1945,10 +2328,19 @@ def fit_model(
         else:
             model = sm.OLS(y, X).fit()
 
+        # 新增：95% 预测区间（论文中常报告“预测值±区间”）
+        try:
+            pred_interval = model.get_prediction(
+                X
+            ).conf_int(alpha=0.05)
+        except Exception:
+            pred_interval = None
+
         return {
             "model": model,
             "display_y": y,
             "prediction": model.predict(X),
+            "prediction_interval": pred_interval,
             "model_type": model_type,
         }
 
@@ -1970,10 +2362,25 @@ def fit_model(
             model.predict(X)
         )
 
+        # 新增：Logit 尺度上的区间需逆变换回 0~1 比例尺度
+        try:
+            _logit_ci = model.get_prediction(
+                X
+            ).conf_int(alpha=0.05)
+            pred_interval = np.column_stack(
+                [
+                    inverse_logit(_logit_ci[:, 0]),
+                    inverse_logit(_logit_ci[:, 1]),
+                ]
+            )
+        except Exception:
+            pred_interval = None
+
         return {
             "model": model,
             "display_y": y,
             "prediction": prediction,
+            "prediction_interval": pred_interval,
             "transformed_y": transformed_y,
             "model_type": model_type,
         }
@@ -2038,10 +2445,20 @@ def fit_model(
             family=sm.families.Poisson(),
         ).fit()
 
+        # 新增：GLM 预测区间在对数连接尺度，需指数还原
+        try:
+            _poi_ci = model.get_prediction(
+                X
+            ).conf_int(alpha=0.05)
+            pred_interval = np.exp(_poi_ci)
+        except Exception:
+            pred_interval = None
+
         return {
             "model": model,
             "display_y": y,
             "prediction": model.predict(X),
+            "prediction_interval": pred_interval,
             "model_type": model_type,
         }
 
@@ -2052,10 +2469,19 @@ def fit_model(
             family=sm.families.NegativeBinomial(),
         ).fit()
 
+        try:
+            _nb_ci = model.get_prediction(
+                X
+            ).conf_int(alpha=0.05)
+            pred_interval = np.exp(_nb_ci)
+        except Exception:
+            pred_interval = None
+
         return {
             "model": model,
             "display_y": y,
             "prediction": model.predict(X),
+            "prediction_interval": pred_interval,
             "model_type": model_type,
         }
 
@@ -2176,6 +2602,22 @@ def prepare_new_data(
                 X_new[col] = X_new[col].fillna(median_value)
                 if filled:
                     notes.append(f"变量「{col}」缺失 {filled} 个值，已用中位数填补。")
+        elif var_type == "时间":
+            # 修复：时间列在转换后已为“距1970-01-01的天数”，
+            # 缺失值用中位数填补，避免预测时出现 NaN 而无提示。
+            median_time = X_new[col].median()
+
+            if pd.isna(median_time):
+                n_dropped += int(X_new[col].isna().sum())
+                X_new = X_new.dropna(subset=[col])
+            else:
+                filled = X_new[col].isna().sum()
+                X_new[col] = X_new[col].fillna(median_time)
+                if filled:
+                    notes.append(
+                        f"变量「{col}」缺失 {filled} 个值，"
+                        "已用中位数（时间序号）填补。"
+                    )
         elif var_type == "分类":
             mode_values = X_new[col].mode(dropna=True)
 
@@ -2365,6 +2807,209 @@ def compare_models(
             )
 
     return pd.DataFrame(rows)
+
+
+def run_kfold_cv(
+    y,
+    X,
+    groups,
+    model_type,
+    n_splits=5,
+    robust_se=False,
+    random_state=42,
+):
+    """
+    K-Fold 交叉验证。
+
+    返回 (每折明细表, 汇总统计表, 说明文本)。
+    有分组变量时自动按组划分（GroupKFold），
+    避免同一对象同时出现在训练集和测试集。
+    """
+    from sklearn.model_selection import (
+        KFold,
+        StratifiedKFold,
+        GroupKFold,
+    )
+
+    y_s = pd.Series(np.asarray(y)).reset_index(drop=True)
+    X_s = X.reset_index(drop=True)
+
+    groups_s = None
+
+    if groups is not None:
+        groups_s = pd.Series(groups).reset_index(drop=True)
+
+    has_real_groups = (
+        groups_s is not None
+        and groups_s.nunique() < len(groups_s)
+    )
+
+    n_valid = len(y_s)
+    n_splits = max(2, min(int(n_splits), n_valid // 2))
+
+    if has_real_groups:
+        splitter = GroupKFold(n_splits=n_splits)
+        fold_iterator = splitter.split(
+            X_s,
+            y_s,
+            groups=groups_s,
+        )
+    elif model_type in [
+        "二项Logistic回归",
+        "多项Logistic回归",
+    ]:
+        splitter = StratifiedKFold(
+            n_splits=n_splits,
+            shuffle=True,
+            random_state=random_state,
+        )
+        fold_iterator = splitter.split(X_s, y_s)
+    else:
+        splitter = KFold(
+            n_splits=n_splits,
+            shuffle=True,
+            random_state=random_state,
+        )
+        fold_iterator = splitter.split(X_s)
+
+    fold_rows = []
+    failed_folds = 0
+
+    for fold_idx, (tr_idx, te_idx) in enumerate(
+        fold_iterator,
+        start=1,
+    ):
+        y_tr = y_s.iloc[tr_idx].reset_index(drop=True)
+        y_te = y_s.iloc[te_idx].reset_index(drop=True)
+        X_tr = X_s.iloc[tr_idx].reset_index(drop=True)
+        X_te = X_s.iloc[te_idx].reset_index(drop=True)
+
+        g_tr = None
+
+        if groups_s is not None:
+            g_tr = groups_s.iloc[tr_idx].reset_index(drop=True)
+
+        try:
+            fitted_fold = fit_model(
+                y_tr,
+                X_tr,
+                g_tr,
+                model_type,
+                robust_se=robust_se,
+            )
+
+            fold_model = fitted_fold["model"]
+
+            if model_type == "二项Logistic回归":
+                prob = np.asarray(
+                    fold_model.predict(X_te),
+                    dtype=float,
+                )
+                cls = (prob >= 0.5).astype(int)
+                fold_rows.append(
+                    {
+                        "折": fold_idx,
+                        "准确率": accuracy_score(
+                            y_te.astype(int),
+                            cls,
+                        ),
+                        "ROC-AUC": (
+                            roc_auc_score(
+                                y_te.astype(int),
+                                prob,
+                            )
+                            if len(np.unique(y_te)) == 2
+                            else np.nan
+                        ),
+                    }
+                )
+            elif model_type == "多项Logistic回归":
+                prob = np.asarray(
+                    fold_model.predict(X_te)
+                )
+                cls = prob.argmax(axis=1)
+                fold_rows.append(
+                    {
+                        "折": fold_idx,
+                        "准确率": accuracy_score(
+                            y_te.astype(int),
+                            cls,
+                        ),
+                    }
+                )
+            else:
+                pred = np.asarray(
+                    fold_model.predict(X_te),
+                    dtype=float,
+                )
+
+                if model_type == "Logit变换线性回归":
+                    pred = inverse_logit(pred)
+
+                fold_rows.append(
+                    {
+                        "折": fold_idx,
+                        "RMSE": np.sqrt(
+                            mean_squared_error(
+                                y_te,
+                                pred,
+                            )
+                        ),
+                        "MAE": mean_absolute_error(
+                            y_te,
+                            pred,
+                        ),
+                        "R²": r2_score(y_te, pred),
+                    }
+                )
+        except Exception:
+            failed_folds += 1
+            continue
+
+    if len(fold_rows) < 2:
+        raise ValueError(
+            f"成功完成的折数过少（{len(fold_rows)}），"
+            "无法进行交叉验证评估。"
+        )
+
+    fold_df = pd.DataFrame(fold_rows)
+    summary_rows = []
+
+    for col in fold_df.columns:
+        if col == "折":
+            continue
+
+        values = pd.to_numeric(
+            fold_df[col],
+            errors="coerce",
+        ).dropna()
+
+        if len(values) == 0:
+            continue
+
+        summary_rows.append(
+            {
+                "指标": col,
+                "均值": values.mean(),
+                "标准差": values.std(),
+                "最小值": values.min(),
+                "最大值": values.max(),
+            }
+        )
+
+    summary_df = pd.DataFrame(summary_rows)
+
+    note_text = (
+        f"共 {len(fold_df)} 折成功完成"
+        + (
+            f"（另有 {failed_folds} 折拟合失败已跳过）"
+            if failed_folds
+            else ""
+        )
+        + "。"
+    )
+
+    return fold_df, summary_df, note_text
 
 
 # ============================================================
@@ -2802,6 +3447,18 @@ def create_prediction_table(fitted_result):
         - result["预测值"]
     )
 
+    if (
+        "prediction_interval" in fitted_result
+        and fitted_result["prediction_interval"] is not None
+    ):
+        interval = np.asarray(
+            fitted_result["prediction_interval"]
+        )
+
+        if interval.ndim == 2 and interval.shape[1] >= 2:
+            result["预测区间下限"] = interval[:, 0]
+            result["预测区间上限"] = interval[:, 1]
+
     if "probability" in fitted_result:
         probability = np.asarray(
             fitted_result["probability"]
@@ -3106,6 +3763,10 @@ with st.sidebar:
             st.session_state.get("guide_step", 0)
         )
 
+        render_mission_checklist(
+            st.session_state.get("guide_step", 0)
+        )
+
     if app_mode == '数据分析':
         st.header("基本设置")
 
@@ -3184,6 +3845,14 @@ with st.sidebar:
             st.success(
                 f"主类型：{detect_result['main_type']}"
             )
+
+            with st.expander(
+                "📋 针对本题型的推荐流程",
+                expanded=True,
+            ):
+                render_problem_path_guide(
+                    detect_result["main_type"]
+                )
 
             detected_labels = detect_result.get(
                 "all_detected_labels",
@@ -3292,8 +3961,15 @@ with st.sidebar:
             "处理方式",
             [
                 "分类型处理",
+                "KNN插补",
                 "删除含缺失值的行",
             ],
+            help=(
+                "分类型处理：数值列线性插值+中位数，分类列众数；"
+                "KNN插补：用距离最近的样本加权估计缺失值"
+                "（数值变量较多时推荐）；"
+                "删除含缺失值的行：最保守但会损失样本。"
+            ),
         )
 
         st.subheader("异常值处理")
@@ -3304,7 +3980,13 @@ with st.sidebar:
                 "不处理",
                 "3σ",
                 "IQR",
+                "MAD",
             ],
+            help=(
+                "3σ：基于正态假设，适合对称分布；"
+                "IQR：箱线图法，对偏态更稳健；"
+                "MAD：中位数绝对偏差，最稳健但可能标记偏多。"
+            ),
         )
 
         outlier_action = st.selectbox(
@@ -4704,13 +5386,26 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                 compare_df_now = st.session_state["compare_df"]
 
                 if "AIC" in compare_df_now.columns:
-                    best_row = compare_df_now.loc[
-                        compare_df_now["AIC"].idxmin()
-                    ]
-                    st.success(
-                        f"按 AIC 最小原则，推荐模型：**{best_row['模型']}**"
-                        f"（AIC={best_row['AIC']:.3f}）"
+                    # 修复：拟合失败的模型行 AIC 为 NaN，
+                    # 直接 idxmin 可能选中 NaN 行，必须先过滤。
+                    aic_valid = compare_df_now.dropna(
+                        subset=["AIC"]
                     )
+
+                    if not aic_valid.empty:
+                        best_row = aic_valid.loc[
+                            aic_valid["AIC"].idxmin()
+                        ]
+                        st.success(
+                            f"按 AIC 最小原则，推荐模型："
+                            f"**{best_row['模型']}**"
+                            f"（AIC={best_row['AIC']:.3f}）"
+                        )
+                    else:
+                        st.info(
+                            "对比的模型均未能提供有效的 AIC，"
+                            "无法按 AIC 推荐。"
+                        )
 
         previous_model_type = st.session_state.get(
             "selected_model_type"
@@ -4821,6 +5516,45 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                 st.success(
                     "模型拟合完成，结果已经保存。"
                 )
+
+                # 模型导出（joblib）：训练一次即可离线复用
+                try:
+                    import joblib
+                    import io as _io
+
+                    _model_buffer = _io.BytesIO()
+                    joblib.dump(
+                        {
+                            "model": new_fitted_result["model"],
+                            "model_type": final_model_type,
+                            "meta": model_meta,
+                            "target": target,
+                            "predictors": predictors,
+                            "variable_types": variable_types,
+                            "target_mapping": model_meta.get(
+                                "target_mapping"
+                            ),
+                        },
+                        _model_buffer,
+                    )
+
+                    st.download_button(
+                        "💾 导出训练好的模型 (.joblib)",
+                        data=_model_buffer.getvalue(),
+                        file_name="trained_model.joblib",
+                        mime="application/octet-stream",
+                        key="download_model_joblib",
+                    )
+
+                    st.caption(
+                        "导出的模型可用于离线复用："
+                        "在后续会话中加载后即可对新数据预测，"
+                        "无需重新训练。"
+                    )
+                except Exception as _export_error:
+                    st.warning(
+                        f"模型导出失败（可忽略）：{_export_error}"
+                    )
 
                 # 引导进度：已完成第 6 步（建模与诊断）
                 st.session_state["guide_step"] = max(
@@ -5401,6 +6135,102 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
                     )
 
             # ----------------------------------------------------
+            # K-Fold 交叉验证（比单次划分更稳定的泛化评估）
+            # ----------------------------------------------------
+            with st.expander(
+                "🧪 K-Fold 交叉验证（更稳定的泛化评估）",
+                expanded=False,
+            ):
+                st.caption(
+                    "把数据分成 K 份，轮流用 K-1 份训练、1 份验证，"
+                    "取 K 次结果的均值±标准差，比单次划分更可信。"
+                    "有分组变量时自动按组划分，避免同一对象"
+                    "同时出现在训练集和测试集。"
+                )
+
+                kfold_k = st.selectbox(
+                    "折数 K",
+                    [3, 4, 5, 6, 8, 10],
+                    index=2,
+                    key="kfold_k_selector",
+                )
+
+                if st.button(
+                    "运行 K-Fold 交叉验证",
+                    key="run_kfold_button",
+                ):
+                    try:
+                        kfold_fold_df, kfold_summary_df, kfold_note = (
+                            run_kfold_cv(
+                                y,
+                                X,
+                                groups,
+                                stored_model_type,
+                                n_splits=kfold_k,
+                                robust_se=robust_se,
+                            )
+                        )
+                        st.session_state["kfold_result"] = {
+                            "fold": kfold_fold_df,
+                            "summary": kfold_summary_df,
+                            "note": kfold_note,
+                        }
+                    except Exception as kfold_error:
+                        st.error(
+                            f"K-Fold 交叉验证失败：{kfold_error}"
+                        )
+
+                if "kfold_result" in st.session_state:
+                    kfold_stored = st.session_state["kfold_result"]
+
+                    st.write("每折评估结果")
+                    _st_dataframe(
+                        kfold_stored["fold"],
+                        use_container_width=True,
+                    )
+
+                    st.write("汇总统计（均值±标准差）")
+                    _st_dataframe(
+                        kfold_stored["summary"],
+                        use_container_width=True,
+                    )
+
+                    dataframe_download(
+                        kfold_stored["fold"],
+                        "K-Fold每折结果.csv",
+                        key="download_kfold_fold",
+                    )
+
+                    dataframe_download(
+                        kfold_stored["summary"],
+                        "K-Fold汇总.csv",
+                        key="download_kfold_summary",
+                    )
+
+                    kfold_text = (
+                        f"为评估模型泛化能力，采用K折交叉验证"
+                        f"（K={len(kfold_stored['fold'])}）。"
+                        + kfold_stored["note"]
+                    )
+
+                    for _, row in kfold_stored[
+                        "summary"
+                    ].iterrows():
+                        kfold_text += (
+                            f"{row['指标']}的均值为{row['均值']:.4f}"
+                            f"（标准差{row['标准差']:.4f}），"
+                        )
+
+                    kfold_text = kfold_text.rstrip("，") + "。"
+
+                    st.text_area(
+                        "论文表述",
+                        kfold_text,
+                        height=130,
+                        key="kfold_text_area",
+                    )
+
+            # ----------------------------------------------------
             # 线性模型诊断
             # ----------------------------------------------------
 
@@ -5763,6 +6593,14 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
         st.session_state["guide_step"] = max(
             st.session_state.get("guide_step", 0),
             7,
+        )
+
+        st.info(
+            "高级分析为**可选模块**，按题型选用："
+            "评价类→熵权TOPSIS / PCA；预测类→灰色预测 / ARIMA；"
+            "分类类→随机森林 / 决策树；"
+            "任何已拟合模型都可做稳健性分析。"
+            "每个 Tab 顶部都有“何时使用”的说明。"
         )
 
         adv_tabs = st.tabs(
@@ -7435,6 +8273,62 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
     """
         )
 
+    # ===== 新手常见问题 FAQ =====
+    with st.expander("❓ 新手常见问题（FAQ）"):
+        faq_items = [
+            (
+                "没有现成数据怎么办？",
+                "点击侧边栏「📥 下载示例数据（CSV）」，先把全流程走通；"
+                "正式比赛时数据通常由赛题附件提供。",
+            ),
+            (
+                "因变量（要预测的东西）选哪个？",
+                "赛题里“预测/解释/排名/评价”的对象就是因变量。"
+                "例如：预测销量，销量就是因变量。",
+            ),
+            (
+                "变量类型识别得对吗？",
+                "自动识别仅供参考，务必在第④步人工核对："
+                "连续=数值、分类=类别、时间=日期、次数=非负整数。"
+                "类型错了，推荐的模型就会错。",
+            ),
+            (
+                "模型拟合失败或不收敛怎么办？",
+                "先检查：①有效样本是否够多（≥10 条）；"
+                "②自变量数量是否小于样本数；"
+                "③分类因变量的类别是否过少；"
+                "④是否误选了需要分组变量的混合效应模型。"
+                "也可用「多模型对比」换一个更简单的模型。",
+            ),
+            (
+                "时间序列只有十几行数据，能用 ARIMA 吗？",
+                "不建议。ARIMA 至少需要 30 期左右，"
+                "4~30 期的小样本请用「灰色预测 GM(1,1)」。",
+            ),
+            (
+                "分类模型准确率很高，但还需要看什么？",
+                "类别不平衡时准确率会虚高，"
+                "务必同时看平衡准确率、F1、ROC-AUC 和混淆矩阵。",
+            ),
+            (
+                "什么时候用高级分析？",
+                "评价类→熵权TOPSIS；预测类→灰色预测/ARIMA；"
+                "分类类→随机森林；其他题型或写完主模型后→稳健性分析。",
+            ),
+            (
+                "写论文时图表和表述从哪来？",
+                "每个环节都有可直接复制的「论文表述」文本框；"
+                "每张图可下载 PNG；最后「📑 一键导出综合报告」"
+                "会把本会话所有图表和表格汇总成 Word。",
+            ),
+        ]
+
+        for question, answer in faq_items:
+            st.markdown(f"**Q：{question}**")
+            st.markdown(f"**A：** {answer}")
+
+    # ===== FAQ 结束 =====
+
 
 else:  # 优化求解模块
 
@@ -7528,6 +8422,7 @@ else:  # 优化求解模块
         coeff = st.number_input(
             f"系数 {c}",
             value=default_val,
+            step=0.1,
             format="%.4f",
         )
         obj_coeffs.append(coeff)
@@ -7585,8 +8480,26 @@ else:  # 优化求解模块
     if use_bounds:
         for i, col in enumerate(var_cols):
             c1, c2 = st.columns(2)
-            lo = c1.number_input(f"{col} 下界", value=0.0)
-            hi = c2.number_input(f"{col} 上界", value=100.0)
+            lo = c1.number_input(
+                f"{col} 下界",
+                value=0.0,
+                step=1.0,
+                format="%.4f",
+            )
+            hi = c2.number_input(
+                f"{col} 上界",
+                value=100.0,
+                step=1.0,
+                format="%.4f",
+            )
+
+            if hi < lo:
+                st.error(
+                    f"变量「{col}」的上界不能小于下界"
+                    f"（上界 {hi} < 下界 {lo}）。"
+                )
+                st.stop()
+
             bounds[i] = (lo, hi)
 
     # 整数约束
@@ -7658,6 +8571,9 @@ else:  # 优化求解模块
 
                 _ALLOWED_EXPR_NODES = (
                     ast.Expression,
+                    ast.Lambda,
+                    ast.arguments,
+                    ast.arg,
                     ast.BinOp,
                     ast.UnaryOp,
                     ast.Name,
@@ -7677,7 +8593,86 @@ else:  # 优化求解模块
                     ast.List,
                     ast.Tuple,
                     ast.Subscript,
+                    ast.Index,
                 )
+
+                _SAFE_NS_NAMES = set(_SAFE_NS.keys())
+
+                def _check_expr_tree(tree):
+                    """白名单 + 结构校验，阻断属性链逃逸（如 np.__class__）。"""
+                    for node in ast.walk(tree):
+                        node_type = type(node)
+
+                        if node_type not in _ALLOWED_EXPR_NODES:
+                            raise ValueError(
+                                "表达式包含不允许的语法："
+                                f"{node_type.__name__}"
+                            )
+
+                        if node_type is ast.Attribute:
+                            # 只允许访问白名单对象（np/min/max 等）的公开成员，
+                            # 属性名以下划线开头的一律拒绝（防 __class__/__mro__ 逃逸）。
+                            if node.attr.startswith("_"):
+                                raise ValueError(
+                                    "不允许访问以下划线开头的属性："
+                                    f"{node.attr}"
+                                )
+
+                            base = node.value
+
+                            if not (
+                                isinstance(base, ast.Name)
+                                and base.id in _SAFE_NS_NAMES
+                            ):
+                                raise ValueError(
+                                    "属性访问仅允许基于白名单对象"
+                                    f"（{', '.join(sorted(_SAFE_NS_NAMES))}）。"
+                                )
+
+                        elif node_type is ast.Subscript:
+                            # 下标只允许 x[整数] 形式
+                            base = node.value
+                            slice_node = node.slice
+
+                            if isinstance(slice_node, ast.Index):
+                                slice_node = slice_node.value
+
+                            if not (
+                                isinstance(base, ast.Name)
+                                and base.id == "x"
+                            ):
+                                raise ValueError(
+                                    "下标操作仅允许用于决策变量 x，如 x[0]。"
+                                )
+
+                            if not (
+                                isinstance(slice_node, ast.Constant)
+                                and isinstance(slice_node.value, int)
+                            ):
+                                raise ValueError(
+                                    "下标必须是整数常量，如 x[0]。"
+                                )
+
+                            if slice_node.value < 0:
+                                raise ValueError(
+                                    "下标不能为负数。"
+                                )
+
+                        elif node_type is ast.Call:
+                            func = node.func
+
+                            if isinstance(func, ast.Attribute):
+                                # np.xxx() 形式的调用已由 Attribute 规则校验
+                                continue
+
+                            if not (
+                                isinstance(func, ast.Name)
+                                and func.id in _SAFE_NS_NAMES
+                            ):
+                                raise ValueError(
+                                    "只允许调用白名单内的函数"
+                                    f"（{', '.join(sorted(_SAFE_NS_NAMES))}）。"
+                                )
 
                 def _safe_compile_expr(expr_str):
                     """把用户表达式编译为 lambda x 函数（带语法白名单校验）。"""
@@ -7691,17 +8686,13 @@ else:  # 优化求解模块
                             f"表达式语法错误：{exc}"
                         )
 
-                    for node in ast.walk(tree):
-                        if type(node) not in _ALLOWED_EXPR_NODES:
-                            raise ValueError(
-                                "表达式包含不允许的语法："
-                                f"{type(node).__name__}"
-                            )
+                    _check_expr_tree(tree)
 
+                    # 修复：白名单必须合入 globals（而非 locals），
+                    # 否则 lambda 内部引用 np/abs 等会因找不到名字而 NameError。
                     return eval(
                         compile(tree, "<expr>", "eval"),
-                        {"__builtins__": {}},
-                        _SAFE_NS,
+                        dict(_SAFE_NS, **{"__builtins__": {}}),
                     )
 
                 def _make_nlp_con(expr_str):
