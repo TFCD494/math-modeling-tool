@@ -501,6 +501,44 @@ def dataframe_download(df, filename, key=None):
     )
 
 
+def safe_to_latex(df, **kwargs):
+    """DataFrame 转 LaTeX 表格，兼容新旧版 pandas 的 to_latex API。
+
+    pandas 3.0 重写了 DataFrame.to_latex()，移除了 booktabs、bold_rows、
+    encoding、sparsify 等旧参数；若直接传入会抛 TypeError：
+        NDFrame.to_latex() got an unexpected keyword argument 'booktabs'
+
+    这里先按传入参数尝试，失败后自动剔除不受支持的旧参数重试，
+    保证新旧版本 pandas 都能生成 LaTeX 三线表。
+    """
+    if df is None:
+        return ""
+
+    if not isinstance(df, pd.DataFrame):
+        df = pd.DataFrame(df)
+
+    # pandas 3.0 已移除的旧参数
+    legacy_params = {
+        "booktabs",
+        "bold_rows",
+        "encoding",
+        "formatters",
+        "sparsify",
+        "index_names",
+        "line_width",
+    }
+
+    try:
+        return df.to_latex(**kwargs)
+    except TypeError:
+        cleaned_kwargs = {
+            key: value
+            for key, value in kwargs.items()
+            if key not in legacy_params
+        }
+        return df.to_latex(**cleaned_kwargs)
+
+
 # ============================================================
 # 四·补充、UI 兼容与图表管理 helper
 # ============================================================
@@ -6785,7 +6823,10 @@ if st.session_state.get('app_mode', '数据分析') == '数据分析':
 
             st.write("LaTeX 三线表（可直接粘贴到论文）")
 
-            latex_table_text = result_table.to_latex(
+            # 修复：pandas 3.0 移除了 to_latex 的 booktabs 参数，
+            # 用兼容函数 safe_to_latex 生成，新旧版本都能工作。
+            latex_table_text = safe_to_latex(
+                result_table,
                 index=False,
                 booktabs=True,
             )
